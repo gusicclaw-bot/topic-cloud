@@ -19,6 +19,12 @@ type Message = {
   role: 'user' | 'assistant';
   text: string;
   createdAt: string;
+  meta?: {
+    providerLabel?: string;
+    model?: string;
+    endpoint?: 'responses' | 'chat.completions';
+    error?: string;
+  };
 };
 
 type Chat = {
@@ -432,6 +438,184 @@ function deriveTitle(text: string, fallback: string) {
   return stripped.length > 42 ? `${stripped.slice(0, 39).trimEnd()}…` : stripped;
 }
 
+function normalizeBaseUrl(baseUrl: string) {
+  const trimmed = baseUrl.trim();
+  if (!trimmed) return '';
+  return trimmed.endsWith('/') ? trimmed.slice(0, -1) : trimmed;
+}
+
+function cleanResponseText(value: unknown) {
+  return typeof value === 'string' ? value.trim() : '';
+}
+
+function extractResponsesText(payload: any): string {
+  if (typeof payload?.output_text === 'string' && payload.output_text.trim()) {
+    return payload.output_text.trim();
+  }
+
+  const parts = Array.isArray(payload?.output)
+    ? payload.output.flatMap((item: any) => {
+        if (item?.type !== 'message' || !Array.isArray(item.content)) return [];
+        return item.content
+          .filter((part: any) => part?.type === 'output_text' && typeof part.text === 'string')
+          .map((part: any) => part.text.trim())
+          .filter(Boolean);
+      })
+    : [];
+
+  return parts.join('\n').trim();
+}
+
+function extractChatCompletionText(payload: any): string {
+  const content = payload?.choices?.[0]?.message?.content;
+
+  if (typeof content === 'string') {
+    return content.trim();
+  }
+
+  if (Array.isArray(content)) {
+    return content
+      .map((part: any) => {
+        if (typeof part?.text === 'string') return part.text.trim();
+        if (typeof part?.content === 'string') return part.content.trim();
+        return '';
+      })
+      .filter(Boolean)
+      .join('\n')
+      .trim();
+  }
+
+  return '';
+}
+
+async function parseJsonResponse(response: Response) {
+  const text = await response.text();
+
+  try {
+    return JSON.parse(text);
+  } catch {
+    throw new Error(text || `Request failed with status ${response.status}`);
+  }
+}
+
+async function requestAssistantReply(settings: Settings, topic: Topic, history: Message[]) {
+  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+
+  if (!baseUrl) {
+    throw new Error('Add a valid base URL in Settings before sending a live message.');
+  }
+
+  const primaryModel = settings.model.trim();
+  const fallbackModel = settings.fallbackModel.trim();
+  const modelsToTry = Array.from(new Set([primaryModel, fallbackModel].filter(Boolean)));
+
+  if (!modelsToTry.length) {
+    throw new Error('Add a model in Settings before sending a live message.');
+  }
+
+  const sharedHeaders: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (settings.apiKey.trim()) {
+    sharedHeaders.Authorization = `Bearer ${settings.apiKey.trim()}`;
+  }
+
+  const systemPrompt = [
+    `You are the AI workspace for the topic \"${topic.name}\".`,
+    topic.prompt,
+    'Be concise, useful, and grounded in the current thread. When possible, produce one practical next step.',
+  ].join(' ');
+
+  const recentHistory = history.slice(-12);
+  const input = [
+    {
+      role: 'system',
+      content: [{ type: 'input_text', text: systemPrompt }],
+    },
+    ...recentHistory.map((message) => ({
+      role: message.role,
+      content: [{ type: 'input_text', text: message.text }],
+    })),
+  ];
+
+  const chatMessages = [
+    { role: 'system', content: systemPrompt },
+    ...recentHistory.map((message) => ({ role: message.role, content: message.text })),
+  ];
+
+  const attempts: string[] = [];
+
+  for (const model of modelsToTry) {
+    try {
+      const responsesReply = await fetch(`${baseUrl}/responses`, {
+        method: 'POST',
+        headers: sharedHeaders,
+        body: JSON.stringify({
+          model,
+          input,
+          temperature: 0.2,
+          max_output_tokens: 800,
+          text: { format: { type: 'text' } },
+        }),
+      });
+
+      const responsesPayload = await parseJsonResponse(responsesReply);
+
+      if (!responsesReply.ok) {
+        throw new Error(responsesPayload?.error?.message || `Responses request failed (${responsesReply.status})`);
+      }
+
+      const responsesText = extractResponsesText(responsesPayload);
+      if (responsesText) {
+        return {
+          text: responsesText,
+          model,
+          endpoint: 'responses' as const,
+        };
+      }
+
+      attempts.push(`${model} via responses returned empty output`);
+    } catch (error) {
+      attempts.push(`${model} via responses failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+
+    try {
+      const chatReply = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: sharedHeaders,
+        body: JSON.stringify({
+          model,
+          messages: chatMessages,
+          temperature: 0.2,
+          max_tokens: 800,
+        }),
+      });
+
+      const chatPayload = await parseJsonResponse(chatReply);
+
+      if (!chatReply.ok) {
+        throw new Error(chatPayload?.error?.message || `Chat request failed (${chatReply.status})`);
+      }
+
+      const chatText = extractChatCompletionText(chatPayload);
+      if (chatText) {
+        return {
+          text: chatText,
+          model,
+          endpoint: 'chat.completions' as const,
+        };
+      }
+
+      attempts.push(`${model} via chat/completions returned empty output`);
+    } catch (error) {
+      attempts.push(`${model} via chat/completions failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  }
+
+  throw new Error(attempts[attempts.length - 1] || 'No compatible model reply was returned.');
+}
+
 function buildAssistantReply(topic: Topic, text: string) {
   const lowered = text.toLowerCase();
 
@@ -450,6 +634,55 @@ function buildAssistantReply(topic: Topic, text: string) {
   return `Saved to ${topic.name}. This has enough detail to shape the thread summary, and the core idea can graduate into the journal if it proves durable.`;
 }
 
+async function testModelConnection(settings: Settings) {
+  const baseUrl = normalizeBaseUrl(settings.baseUrl);
+  const model = settings.model.trim();
+
+  if (!baseUrl) {
+    throw new Error('Add a valid base URL first.');
+  }
+
+  if (!model) {
+    throw new Error('Add a model id first.');
+  }
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+  };
+
+  if (settings.apiKey.trim()) {
+    headers.Authorization = `Bearer ${settings.apiKey.trim()}`;
+  }
+
+  const startedAt = performance.now();
+  const reply = await fetch(`${baseUrl}/responses`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({
+      model,
+      input: 'Reply with exactly CONNECTION_OK',
+      temperature: 0.1,
+      max_output_tokens: 64,
+      text: { format: { type: 'text' } },
+    }),
+  });
+
+  const payload = await parseJsonResponse(reply);
+  if (!reply.ok) {
+    throw new Error(payload?.error?.message || `Connection test failed (${reply.status})`);
+  }
+
+  const text = extractResponsesText(payload);
+  if (!text) {
+    throw new Error('The model responded, but returned no visible text.');
+  }
+
+  return {
+    text,
+    elapsedMs: Math.round(performance.now() - startedAt),
+  };
+}
+
 function sanitizeMessage(item: unknown, fallbackTime: string): Message | null {
   if (!item || typeof item !== 'object') return null;
   const candidate = item as Partial<Message> & { timestamp?: string };
@@ -457,11 +690,28 @@ function sanitizeMessage(item: unknown, fallbackTime: string): Message | null {
   const role = candidate.role === 'assistant' || candidate.role === 'user' ? candidate.role : null;
   if (!text || !role) return null;
 
+  const meta = candidate.meta && typeof candidate.meta === 'object'
+    ? {
+        providerLabel: cleanResponseText((candidate.meta as Message['meta'])?.providerLabel),
+        model: cleanResponseText((candidate.meta as Message['meta'])?.model),
+        endpoint:
+          (candidate.meta as Message['meta'])?.endpoint === 'responses' ||
+          (candidate.meta as Message['meta'])?.endpoint === 'chat.completions'
+            ? (candidate.meta as Message['meta'])?.endpoint
+            : undefined,
+        error: cleanResponseText((candidate.meta as Message['meta'])?.error),
+      }
+    : undefined;
+
   return {
     id: ensureString(candidate.id, createId('msg')),
     role,
     text,
     createdAt: ensureIsoDate(candidate.createdAt ?? candidate.timestamp, fallbackTime),
+    meta:
+      meta && (meta.providerLabel || meta.model || meta.endpoint || meta.error)
+        ? meta
+        : undefined,
   };
 }
 
@@ -607,6 +857,13 @@ function App() {
   const [uiState, setUiState] = useState<AppUiState>(() => loadUiState());
   const [storageStatus, setStorageStatus] = useState(() => getStorageStatus());
   const [showApiKey, setShowApiKey] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+  const [composerError, setComposerError] = useState('');
+  const [pendingChatId, setPendingChatId] = useState('');
+  const [isTestingConnection, setIsTestingConnection] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<
+    { kind: 'ok'; message: string } | { kind: 'error'; message: string } | null
+  >(null);
   const hasHydratedRef = useRef(false);
   const messageStreamRef = useRef<HTMLDivElement | null>(null);
 
@@ -740,12 +997,6 @@ function App() {
             text: trimmedOpening,
             createdAt: nowIso,
           },
-          {
-            id: createId('msg'),
-            role: 'assistant',
-            text: buildAssistantReply(topic, trimmedOpening),
-            createdAt: nowIso,
-          },
         ]
       : [
           {
@@ -781,14 +1032,12 @@ function App() {
     return newChat;
   };
 
-  const sendMessage = () => {
+  const sendMessage = async () => {
     const trimmed = draftMessage.trim();
-    if (!trimmed) return;
+    if (!trimmed || isSending) return;
 
-    if (!selectedChat) {
-      createChat(trimmed);
-      return;
-    }
+    setIsSending(true);
+    setComposerError('');
 
     const nowIso = new Date().toISOString();
     const userMessage: Message = {
@@ -798,30 +1047,96 @@ function App() {
       createdAt: nowIso,
     };
 
-    const assistantMessage: Message = {
-      id: createId('msg'),
-      role: 'assistant',
-      text: buildAssistantReply(selectedTopic, trimmed),
-      createdAt: nowIso,
-    };
+    const activeChat = selectedChat;
+    const chat = activeChat ?? createChat(trimmed);
+    setPendingChatId(chat.id);
 
-    setState((current) => ({
-      ...current,
-      chats: current.chats
-        .map((chat) =>
-          chat.id === selectedChat.id
-            ? {
-                ...chat,
-                title: chat.messages.length <= 1 ? deriveTitle(trimmed, chat.title) : chat.title,
-                summary: deriveSummary(trimmed),
-                updatedAt: nowIso,
-                messages: [...chat.messages, userMessage, assistantMessage],
-              }
-            : chat,
-        )
-        .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
-    }));
+    if (activeChat) {
+      setState((current) => ({
+        ...current,
+        chats: current.chats
+          .map((entry) =>
+            entry.id === activeChat.id
+              ? {
+                  ...entry,
+                  title: entry.messages.length <= 1 ? deriveTitle(trimmed, entry.title) : entry.title,
+                  summary: deriveSummary(trimmed),
+                  updatedAt: nowIso,
+                  messages: [...entry.messages, userMessage],
+                }
+              : entry,
+          )
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+      }));
+    }
+
     setDraftMessage('');
+
+    try {
+      const history = [...chat.messages, userMessage];
+      const reply = await requestAssistantReply(state.settings, selectedTopic, history);
+      const assistantMessage: Message = {
+        id: createId('msg'),
+        role: 'assistant',
+        text: reply.text,
+        createdAt: new Date().toISOString(),
+        meta: {
+          providerLabel: state.settings.providerLabel.trim(),
+          model: reply.model,
+          endpoint: reply.endpoint,
+        },
+      };
+
+      setState((current) => ({
+        ...current,
+        chats: current.chats
+          .map((entry) =>
+            entry.id === chat.id
+              ? {
+                  ...entry,
+                  summary: deriveSummary(reply.text),
+                  updatedAt: assistantMessage.createdAt,
+                  messages: [...entry.messages, assistantMessage],
+                }
+              : entry,
+          )
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to get a model reply.';
+      const fallbackText = `${buildAssistantReply(selectedTopic, trimmed)}\n\nLive request failed: ${message}`;
+      const assistantMessage: Message = {
+        id: createId('msg'),
+        role: 'assistant',
+        text: fallbackText,
+        createdAt: new Date().toISOString(),
+        meta: {
+          providerLabel: state.settings.providerLabel.trim(),
+          model: state.settings.model.trim() || undefined,
+          error: message,
+        },
+      };
+
+      setComposerError(message);
+      setState((current) => ({
+        ...current,
+        chats: current.chats
+          .map((entry) =>
+            entry.id === chat.id
+              ? {
+                  ...entry,
+                  summary: deriveSummary(trimmed),
+                  updatedAt: assistantMessage.createdAt,
+                  messages: [...entry.messages, assistantMessage],
+                }
+              : entry,
+          )
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+      }));
+    } finally {
+      setIsSending(false);
+      setPendingChatId('');
+    }
   };
 
   const addJournalNote = (text: string) => {
@@ -1016,6 +1331,7 @@ function App() {
   };
 
   const updateSettings = (key: keyof Settings, value: string) => {
+    setConnectionStatus(null);
     setState((current) => ({
       ...current,
       settings: {
@@ -1025,10 +1341,121 @@ function App() {
     }));
   };
 
+  const runConnectionTest = async () => {
+    if (isTestingConnection) return;
+
+    setIsTestingConnection(true);
+    setConnectionStatus(null);
+
+    try {
+      const result = await testModelConnection(state.settings);
+      setConnectionStatus({
+        kind: 'ok',
+        message: `${result.text} · ${result.elapsedMs}ms · ${state.settings.model.trim()}`,
+      });
+    } catch (error) {
+      setConnectionStatus({
+        kind: 'error',
+        message: error instanceof Error ? error.message : 'Connection test failed.',
+      });
+    } finally {
+      setIsTestingConnection(false);
+    }
+  };
+
   const handleComposerKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
       event.preventDefault();
       sendMessage();
+    }
+  };
+
+  const retryLastReply = async () => {
+    if (!selectedChat || isSending) return;
+
+    const lastUserIndex = [...selectedChat.messages]
+      .map((message, index) => ({ message, index }))
+      .reverse()
+      .find((entry) => entry.message.role === 'user');
+
+    if (!lastUserIndex) {
+      setComposerError('There is no user message to retry yet.');
+      return;
+    }
+
+    const lastMessage = selectedChat.messages[selectedChat.messages.length - 1];
+    const shouldReplaceAssistant = lastMessage?.role === 'assistant' && lastUserIndex.index < selectedChat.messages.length - 1;
+    const history = selectedChat.messages.slice(0, lastUserIndex.index + 1);
+
+    setIsSending(true);
+    setComposerError('');
+    setPendingChatId(selectedChat.id);
+
+    try {
+      const reply = await requestAssistantReply(state.settings, selectedTopic, history);
+      const assistantMessage: Message = {
+        id: createId('msg'),
+        role: 'assistant',
+        text: reply.text,
+        createdAt: new Date().toISOString(),
+        meta: {
+          providerLabel: state.settings.providerLabel.trim(),
+          model: reply.model,
+          endpoint: reply.endpoint,
+        },
+      };
+
+      setState((current) => ({
+        ...current,
+        chats: current.chats
+          .map((entry) => {
+            if (entry.id !== selectedChat.id) return entry;
+
+            const baseMessages = shouldReplaceAssistant ? entry.messages.slice(0, -1) : entry.messages;
+            return {
+              ...entry,
+              summary: deriveSummary(reply.text),
+              updatedAt: assistantMessage.createdAt,
+              messages: [...baseMessages, assistantMessage],
+            };
+          })
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+      }));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Failed to retry the model reply.';
+      const fallbackText = `${buildAssistantReply(selectedTopic, history[history.length - 1]?.text ?? '')}\n\nLive request failed: ${message}`;
+      const assistantMessage: Message = {
+        id: createId('msg'),
+        role: 'assistant',
+        text: fallbackText,
+        createdAt: new Date().toISOString(),
+        meta: {
+          providerLabel: state.settings.providerLabel.trim(),
+          model: state.settings.model.trim() || undefined,
+          error: message,
+        },
+      };
+
+      setComposerError(message);
+      setState((current) => ({
+        ...current,
+        chats: current.chats
+          .map((entry) => {
+            if (entry.id !== selectedChat.id) return entry;
+
+            const baseMessages = shouldReplaceAssistant ? entry.messages.slice(0, -1) : entry.messages;
+            return {
+              ...entry,
+              summary: deriveSummary(history[history.length - 1]?.text ?? entry.summary),
+              updatedAt: assistantMessage.createdAt,
+              messages: [...baseMessages, assistantMessage],
+            };
+          })
+          .sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt)),
+      }));
+    } finally {
+      setIsSending(false);
+      setPendingChatId('');
     }
   };
 
@@ -1287,8 +1714,29 @@ function App() {
                           <span>{formatClock(message.createdAt)}</span>
                         </div>
                         <p>{message.text}</p>
+                        {message.meta ? (
+                          <div className="message-footnote">
+                            {message.meta.model ? <small>{message.meta.model}</small> : null}
+                            {message.meta.endpoint ? <small>{message.meta.endpoint}</small> : null}
+                            {message.meta.error ? <small className="message-error">{message.meta.error}</small> : null}
+                          </div>
+                        ) : null}
                       </article>
                     ))}
+
+                    {isSending && selectedChat.id === pendingChatId ? (
+                      <article className="message assistant is-pending">
+                        <div className="message-meta">
+                          <strong>AI workspace</strong>
+                          <span>Working…</span>
+                        </div>
+                        <p>Thinking through your latest message and waiting on the configured model reply.</p>
+                        <div className="message-footnote">
+                          {state.settings.model.trim() ? <small>{state.settings.model.trim()}</small> : null}
+                          <small>live request</small>
+                        </div>
+                      </article>
+                    ) : null}
                   </div>
 
                   <div className="composer">
@@ -1300,18 +1748,28 @@ function App() {
                       rows={4}
                     />
                     <div className="composer-footer">
-                      <small>Ctrl/Cmd + Enter to send</small>
-                      <small>{draftMessage.trim().length ? `${draftMessage.trim().length} chars` : 'Draft autosaved locally'}</small>
+                      <small>{isSending ? 'Sending to local model…' : 'Ctrl/Cmd + Enter to send'}</small>
+                      <small>
+                        {composerError
+                          ? 'Last request failed'
+                          : draftMessage.trim().length
+                            ? `${draftMessage.trim().length} chars`
+                            : 'Draft autosaved locally'}
+                      </small>
                     </div>
+                    {composerError ? <div className="composer-error">{composerError}</div> : null}
                     <div className="composer-actions">
-                      <button className="ghost-button" onClick={clearDraftMessage} disabled={!draftMessage.trim()}>
+                      <button className="ghost-button" onClick={clearDraftMessage} disabled={!draftMessage.trim() || isSending}>
                         Clear draft
                       </button>
-                      <button className="ghost-button" onClick={saveComposerToJournal} disabled={!draftMessage.trim()}>
+                      <button className="ghost-button" onClick={retryLastReply} disabled={isSending || !selectedChat?.messages.some((message) => message.role === 'user')}>
+                        Retry last reply
+                      </button>
+                      <button className="ghost-button" onClick={saveComposerToJournal} disabled={!draftMessage.trim() || isSending}>
                         Save to journal
                       </button>
-                      <button className="primary-button" onClick={sendMessage} disabled={!draftMessage.trim()}>
-                        Add to chat
+                      <button className="primary-button" onClick={sendMessage} disabled={!draftMessage.trim() || isSending}>
+                        {isSending ? 'Thinking…' : 'Add to chat'}
                       </button>
                     </div>
                   </div>
@@ -1337,15 +1795,22 @@ function App() {
                       rows={4}
                     />
                     <div className="composer-footer">
-                      <small>The first message creates the room automatically</small>
-                      <small>{draftMessage.trim().length ? `${draftMessage.trim().length} chars` : 'Draft autosaved locally'}</small>
+                      <small>{isSending ? 'Sending to local model…' : 'The first message creates the room automatically'}</small>
+                      <small>
+                        {composerError
+                          ? 'Last request failed'
+                          : draftMessage.trim().length
+                            ? `${draftMessage.trim().length} chars`
+                            : 'Draft autosaved locally'}
+                      </small>
                     </div>
+                    {composerError ? <div className="composer-error">{composerError}</div> : null}
                     <div className="composer-actions">
-                      <button className="ghost-button" onClick={saveComposerToJournal} disabled={!draftMessage.trim()}>
+                      <button className="ghost-button" onClick={saveComposerToJournal} disabled={!draftMessage.trim() || isSending}>
                         Save to journal
                       </button>
-                      <button className="primary-button" onClick={sendMessage} disabled={!draftMessage.trim()}>
-                        Create chat from draft
+                      <button className="primary-button" onClick={sendMessage} disabled={!draftMessage.trim() || isSending}>
+                        {isSending ? 'Thinking…' : 'Create chat from draft'}
                       </button>
                     </div>
                   </div>
@@ -1514,6 +1979,18 @@ function App() {
             <div className="settings-note">
               <strong>Current target:</strong> {state.settings.providerLabel} · {state.settings.model} · {state.settings.baseUrl}
               {state.settings.fallbackModel.trim() ? ` · fallback ${state.settings.fallbackModel}` : ' · no fallback configured'}
+            </div>
+            <div className="settings-test-row">
+              <button className="primary-button" onClick={runConnectionTest} disabled={isTestingConnection}>
+                {isTestingConnection ? 'Testing connection…' : 'Test connection'}
+              </button>
+              {connectionStatus ? (
+                <div className={`connection-status ${connectionStatus.kind}`}>
+                  {connectionStatus.message}
+                </div>
+              ) : (
+                <small className="settings-hint">Runs a tiny live probe against the configured model using `/responses`.</small>
+              )}
             </div>
             <div className="settings-actions">
               <button className="ghost-button" onClick={exportWorkspace}>

@@ -374,6 +374,32 @@ button:disabled {
   line-height: 1.55;
 }
 
+.message-footnote {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 12px;
+}
+
+.message-footnote small,
+.composer-error {
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.78rem;
+}
+
+.message-footnote small {
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(226, 232, 255, 0.74);
+}
+
+.message-footnote .message-error,
+.composer-error {
+  background: rgba(239, 68, 68, 0.16);
+  color: #ffd0d0;
+  border: 1px solid rgba(239, 68, 68, 0.22);
+}
+
 .topic-meta-row {
   display: flex;
   justify-content: space-between;
@@ -592,6 +618,12 @@ button:disabled {
   background: rgba(255, 255, 255, 0.05);
 }
 
+.message.is-pending {
+  border-style: dashed;
+  border-color: rgba(157, 173, 255, 0.32);
+  background: rgba(111, 125, 255, 0.08);
+}
+
 .message-meta {
   display: flex;
   justify-content: space-between;
@@ -642,6 +674,10 @@ select:focus {
   gap: 12px;
   flex-wrap: wrap;
   align-items: center;
+}
+
+.composer-error {
+  justify-self: start;
 }
 
 .primary-button {
@@ -797,6 +833,36 @@ select:focus {
   border-radius: 20px;
   padding: 18px;
   color: #dce5ff;
+}
+
+.settings-test-row {
+  display: grid;
+  gap: 12px;
+  align-items: start;
+}
+
+.settings-hint {
+  color: rgba(226, 232, 255, 0.72);
+}
+
+.connection-status {
+  border-radius: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.05);
+  color: #e6ecff;
+}
+
+.connection-status.ok {
+  background: rgba(67, 203, 129, 0.12);
+  border-color: rgba(67, 203, 129, 0.28);
+  color: #baf5d2;
+}
+
+.connection-status.error {
+  background: rgba(239, 68, 68, 0.14);
+  border-color: rgba(239, 68, 68, 0.26);
+  color: #ffd0d0;
 }
 
 .archive-panel {
