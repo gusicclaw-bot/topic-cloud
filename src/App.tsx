@@ -144,6 +144,65 @@ async function searchWeb(apiKey: string, query: string): Promise<string> {
   }
 }
 
+// Tree View Types
+interface TreeNode {
+  chat: Chat;
+  children: TreeNode[];
+  depth: number;
+  isExpanded: boolean;
+}
+
+// Build tree structure from flat chats
+function buildChatTree(chats: Chat[]): TreeNode[] {
+  const chatMap = new Map<string, Chat>();
+  const childrenMap = new Map<string, string[]>();
+  
+  chats.forEach(chat => {
+    chatMap.set(chat.id, chat);
+    if (chat.parentId) {
+      const siblings = childrenMap.get(chat.parentId) || [];
+      siblings.push(chat.id);
+      childrenMap.set(chat.parentId, siblings);
+    }
+  });
+  
+  const roots: TreeNode[] = [];
+  const processed = new Set<string>();
+  
+  function buildNode(chatId: string, depth: number): TreeNode | null {
+    if (processed.has(chatId)) return null;
+    processed.add(chatId);
+    
+    const chat = chatMap.get(chatId);
+    if (!chat) return null;
+    
+    const childIds = childrenMap.get(chatId) || [];
+    const children = childIds
+      .map(id => buildNode(id, depth + 1))
+      .filter((n): n is TreeNode => n !== null);
+    
+    return {
+      chat,
+      children,
+      depth,
+      isExpanded: true,
+    };
+  }
+  
+  // Find roots (chats without parents, or parents not in current topic)
+  chats.forEach(chat => {
+    if (!chat.parentId || !chatMap.has(chat.parentId)) {
+      const node = buildNode(chat.id, 0);
+      if (node) roots.push(node);
+    }
+  });
+  
+  // Sort by date
+  roots.sort((a, b) => new Date(b.chat.updatedAt).getTime() - new Date(a.chat.updatedAt).getTime());
+  
+  return roots;
+}
+
 // Main App
 function App() {
   // State
@@ -156,8 +215,76 @@ function App() {
   const [isSending, setIsSending] = useState(false);
   const [modelStatus, setModelStatus] = useState<ModelStatus>('ready');
   const [testResult, setTestResult] = useState<string | null>(null);
+  const [expandedChats, setExpandedChats] = useState<Set<string>>(new Set());
+  const [showSidebar, setShowSidebar] = useState(true);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // Toggle expand/collapse for tree nodes
+  function toggleExpanded(chatId: string) {
+    setExpandedChats(prev => {
+      const next = new Set(prev);
+      if (next.has(chatId)) {
+        next.delete(chatId);
+      } else {
+        next.add(chatId);
+      }
+      return next;
+    });
+  }
+
+  // Tree View Component
+  function TreeView({ nodes, level = 0 }: { nodes: TreeNode[]; level?: number }) {
+    return (
+      <>
+        {nodes.map(node => {
+          const isExpanded = expandedChats.has(node.chat.id);
+          const hasChildren = node.children.length > 0;
+          const isActive = node.chat.id === activeChat;
+          
+          return (
+            <div key={node.chat.id} className="tree-node">
+              <div 
+                className={`tree-item ${isActive ? 'active' : ''} ${node.chat.parentId ? 'is-branch' : ''}`}
+                style={{ paddingLeft: `${level * 20 + 12}px` }}
+                onClick={() => selectChat(node.chat.id)}
+              >
+                {/* Expand/collapse button */}
+                {hasChildren && (
+                  <button 
+                    className="tree-toggle"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      toggleExpanded(node.chat.id);
+                    }}
+                  >
+                    {isExpanded ? '▼' : '▶'}
+                  </button>
+                )}
+                {!hasChildren && <span className="tree-spacer" />}
+                
+                {/* Branch indicator */}
+                {node.chat.parentId && <span className="tree-branch-icon">⟿</span>}
+                
+                {/* Title */}
+                <span className="tree-title">{node.chat.title}</span>
+                
+                {/* Message count */}
+                <span className="tree-count">{node.chat.messages.length}</span>
+              </div>
+              
+              {/* Children */}
+              {hasChildren && isExpanded && (
+                <div className="tree-children">
+                  <TreeView nodes={node.children} level={level + 1} />
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </>
+    );
+  }
 
   // Derived state
   const currentTopic = useMemo(() => 
@@ -494,50 +621,77 @@ function App() {
 
         {/* Chat View */}
         <div className={`view chat-view ${view === 'chat' ? 'active' : ''}`}>
-          {/* Chat Header */}
-          <div className="chat-header">
-            <button className="chat-header-back" onClick={goBack}>
-              ←
-            </button>
-            <div className="chat-header-info">
-              <h2>{currentTopic?.name || 'Chat'}</h2>
-              <p>{currentTopic?.description}</p>
-            </div>
-            <div className="chat-actions">
-              <button className="btn-secondary" onClick={createNewChat}>
-                New chat
-              </button>
-            </div>
-          </div>
-
-          {/* Thread Selection */}
-          {topicChats.length > 0 && (
-            <div className="threads-list">
-              {topicChats.map(chat => (
-                <button 
-                  key={chat.id}
-                  className={`thread-item ${chat.id === activeChat ? 'active' : ''} ${chat.parentId ? 'is-branch' : ''}`}
-                  onClick={() => selectChat(chat.id)}
-                >
-                  <div className="thread-header">
-                    <h4>{chat.title}</h4>
-                    {chat.parentId && <span className="branch-badge">Branch</span>}
+          {/* Chat Layout with Sidebar */}
+          <div className="chat-layout">
+            {/* Left Sidebar - Tree View */}
+            <aside className={`chat-sidebar ${showSidebar ? 'open' : 'closed'}`}>
+              <div className="sidebar-header">
+                <div className="sidebar-title">
+                  <h3>{currentTopic?.name || 'Conversations'}</h3>
+                  <span className="chat-count">{topicChats.length}</span>
+                </div>
+                <div className="sidebar-actions">
+                  <button 
+                    className="btn-icon" 
+                    onClick={createNewChat}
+                    title="New conversation"
+                  >
+                    +
+                  </button>
+                  <button 
+                    className="btn-icon"
+                    onClick={() => setShowSidebar(false)}
+                    title="Collapse sidebar"
+                  >
+                    ◀
+                  </button>
+                </div>
+              </div>
+              
+              {/* Tree View */}
+              <div className="tree-container">
+                {topicChats.length === 0 ? (
+                  <div className="tree-empty">
+                    <p>No conversations yet</p>
+                    <button className="btn-secondary" onClick={createNewChat}>
+                      Start new chat
+                    </button>
                   </div>
-                  <p>{chat.messages[chat.messages.length - 1]?.text.slice(0, 60) || 'No messages yet'}...</p>
-                  {chat.tags.length > 0 && (
-                    <div className="thread-tags">
-                      {chat.tags.map(tag => (
-                        <span key={tag} className="tag">{tag}</span>
-                      ))}
-                    </div>
-                  )}
-                  <small>{formatRelative(chat.updatedAt)}</small>
+                ) : (
+                  <TreeView nodes={buildChatTree(topicChats)} />
+                )}
+              </div>
+            </aside>
+            
+            {/* Main Chat Area */}
+            <main className="chat-main">
+              {/* Collapsed sidebar toggle */}
+              {!showSidebar && (
+                <button 
+                  className="sidebar-toggle"
+                  onClick={() => setShowSidebar(true)}
+                  title="Show sidebar"
+                >
+                  ▶
                 </button>
-              ))}
-            </div>
-          )}
-
-          {/* Messages */}
+              )}
+              
+              {/* Chat Header */}
+              <div className="chat-header-compact">
+                <button className="chat-header-back" onClick={goBack}>
+                  ←
+                </button>
+                <div className="chat-header-info">
+                  <h2>{currentTopic?.name || 'Chat'}</h2>
+                </div>
+                <div className="chat-actions">
+                  <button className="btn-secondary" onClick={createNewChat}>
+                    New chat
+                  </button>
+                </div>
+              </div>
+              
+              {/* Messages */}
           {currentChat ? (
             <>
               <div className="chat-messages">
@@ -628,9 +782,11 @@ function App() {
           ) : (
             <div className="empty-state">
               <h3>No chat selected</h3>
-              <p>Click "New chat" to start</p>
+              <p>Select a conversation from the sidebar or start a new one</p>
             </div>
           )}
+            </main>
+          </div>
         </div>
 
         {/* Settings View */}

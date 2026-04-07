@@ -151,7 +151,7 @@ const server = http.createServer(async (req, res) => {
   res.end(JSON.stringify({ error: 'Not found' }));
 });
 
-server.listen(PORT, () => {
+server.listen(PORT, '0.0.0.0', () => {
   console.log(`Proxy server running on http://localhost:${PORT}`);
   console.log('Environment variables:');
   console.log('  BRAVE_API_KEY:', BRAVE_API_KEY ? 'Set' : 'Not set');
