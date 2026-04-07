@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { marked } from 'marked';
 
 // Types
 type TopicId = 'golf' | 'football' | 'gaming' | 'work' | 'ideas' | 'learning';
@@ -409,10 +410,13 @@ function App() {
                 
                 {currentChat.messages.map(msg => (
                   <div key={msg.id} className={`message ${msg.role}`}>
-                    <div className="message-bubble">
-                      {msg.text}
-                      {msg.error && <div className="message-error">{msg.error}</div>}
-                    </div>
+                    <div 
+                      className="message-bubble markdown-content"
+                      dangerouslySetInnerHTML={{ 
+                        __html: marked.parse(msg.text, { breaks: true, gfm: true }) as string 
+                      }}
+                    />
+                    {msg.error && <div className="message-error">{msg.error}</div>}
                     <div className="message-meta">{formatTime(msg.createdAt)}</div>
                   </div>
                 ))}
