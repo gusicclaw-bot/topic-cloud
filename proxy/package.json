@@ -1,0 +1,13 @@
+{
+  "name": "topic-cloud-proxy",
+  "version": "1.0.0",
+  "description": "Proxy server for Topic Cloud with web search support",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "keywords": ["proxy", "web-search", "lm-studio"],
+  "author": "",
+  "license": "MIT"
+}

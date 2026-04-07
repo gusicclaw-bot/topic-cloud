@@ -94,6 +94,7 @@ async function sendToModel(settings: Settings, messages: { role: string; content
       messages,
       temperature: 0.7,
       max_tokens: 1000,
+      enableSearch: settings.enableWebSearch,
     }),
   });
 
