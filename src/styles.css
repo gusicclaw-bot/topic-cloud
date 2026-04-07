@@ -680,6 +680,72 @@ small {
   color: var(--color-text-tertiary);
 }
 
+/* Branching */
+.thread-header {
+  display: flex;
+  align-items: center;
+  gap: var(--space-sm);
+  margin-bottom: var(--space-xs);
+}
+
+.thread-item.is-branch {
+  border-left: 3px solid var(--color-accent);
+}
+
+.branch-badge {
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+  background: var(--color-accent-light);
+  color: var(--color-accent);
+  border-radius: 12px;
+  font-weight: 500;
+}
+
+.thread-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-xs);
+  margin-top: var(--space-xs);
+  margin-bottom: var(--space-xs);
+}
+
+.tag {
+  font-size: 0.6875rem;
+  padding: 2px 8px;
+  background: var(--color-bg-subtle);
+  color: var(--color-text-secondary);
+  border-radius: 4px;
+}
+
+.message-actions {
+  display: flex;
+  gap: var(--space-sm);
+  margin-top: var(--space-xs);
+  opacity: 0;
+  transition: opacity var(--transition-fast);
+}
+
+.message:hover .message-actions {
+  opacity: 1;
+}
+
+.btn-fork {
+  font-size: 0.6875rem;
+  padding: 4px 12px;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  transition: all var(--transition-fast);
+}
+
+.btn-fork:hover {
+  background: var(--color-bg-hover);
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
 /* Markdown Content */
 .markdown-content {
   line-height: 1.7;

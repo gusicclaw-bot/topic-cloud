@@ -27,6 +27,10 @@ interface Chat {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
+  parentId?: string;        // For branching: which chat this forked from
+  branchPoint?: number;     // Message index where fork happened
+  tags: string[];           // Auto-generated tags
+  isArchived?: boolean;     // Soft delete
 }
 
 interface Settings {
@@ -220,10 +224,96 @@ function App() {
       messages: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
+      tags: [],
     };
     
     setChats(prev => [newChat, ...prev]);
     setActiveChat(newChat.id);
+  }
+
+  function forkChat(chatId: string, messageIndex: number, newTitle?: string) {
+    const sourceChat = chats.find(c => c.id === chatId);
+    if (!sourceChat) return;
+
+    // Create forked chat with messages up to branch point
+    const forkedChat: Chat = {
+      id: createId('chat'),
+      topicId: sourceChat.topicId,
+      title: newTitle || `${sourceChat.title} (fork)`,
+      messages: sourceChat.messages.slice(0, messageIndex + 1),
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      parentId: sourceChat.id,
+      branchPoint: messageIndex,
+      tags: [...sourceChat.tags],
+    };
+
+    setChats(prev => [forkedChat, ...prev]);
+    setActiveChat(forkedChat.id);
+    return forkedChat.id;
+  }
+
+  function mergeChats(targetChatId: string, sourceChatId: string) {
+    const targetChat = chats.find(c => c.id === targetChatId);
+    const sourceChat = chats.find(c => c.id === sourceChatId);
+    if (!targetChat || !sourceChat) return;
+
+    // Combine unique tags
+    const mergedTags = [...new Set([...targetChat.tags, ...sourceChat.tags])];
+
+    // Add merge marker message
+    const mergeMessage: Message = {
+      id: createId('msg'),
+      role: 'assistant',
+      text: `--- Merged from "${sourceChat.title}" ---\n\n${sourceChat.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`,
+      createdAt: new Date().toISOString(),
+    };
+
+    setChats(prev => prev.map(chat => {
+      if (chat.id === targetChatId) {
+        return {
+          ...chat,
+          messages: [...chat.messages, mergeMessage],
+          tags: mergedTags,
+          updatedAt: new Date().toISOString(),
+        };
+      }
+      return chat;
+    }));
+  }
+
+  async function autoTagChat(chatId: string) {
+    const chat = chats.find(c => c.id === chatId);
+    if (!chat || chat.messages.length === 0) return;
+
+    // Simple keyword-based tagging for now
+    const allText = chat.messages.map(m => m.text).join(' ').toLowerCase();
+    const tags: string[] = [];
+
+    // Extract potential tags from content
+    if (allText.includes('code') || allText.includes('programming') || allText.includes('function')) {
+      tags.push('coding');
+    }
+    if (allText.includes('idea') || allText.includes('concept') || allText.includes('think')) {
+      tags.push('ideas');
+    }
+    if (allText.includes('plan') || allText.includes('schedule') || allText.includes('todo')) {
+      tags.push('planning');
+    }
+    if (allText.includes('question') || allText.includes('how') || allText.includes('what')) {
+      tags.push('questions');
+    }
+    if (allText.includes('bug') || allText.includes('error') || allText.includes('fix')) {
+      tags.push('debugging');
+    }
+
+    // Add date-based tag
+    const date = new Date(chat.createdAt);
+    tags.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+
+    setChats(prev => prev.map(c => 
+      c.id === chatId ? { ...c, tags: [...new Set([...c.tags, ...tags])] } : c
+    ));
   }
 
   async function sendMessage() {
@@ -426,11 +516,21 @@ function App() {
               {topicChats.map(chat => (
                 <button 
                   key={chat.id}
-                  className={`thread-item ${chat.id === activeChat ? 'active' : ''}`}
+                  className={`thread-item ${chat.id === activeChat ? 'active' : ''} ${chat.parentId ? 'is-branch' : ''}`}
                   onClick={() => selectChat(chat.id)}
                 >
-                  <h4>{chat.title}</h4>
+                  <div className="thread-header">
+                    <h4>{chat.title}</h4>
+                    {chat.parentId && <span className="branch-badge">Branch</span>}
+                  </div>
                   <p>{chat.messages[chat.messages.length - 1]?.text.slice(0, 60) || 'No messages yet'}...</p>
+                  {chat.tags.length > 0 && (
+                    <div className="thread-tags">
+                      {chat.tags.map(tag => (
+                        <span key={tag} className="tag">{tag}</span>
+                      ))}
+                    </div>
+                  )}
                   <small>{formatRelative(chat.updatedAt)}</small>
                 </button>
               ))}
@@ -448,7 +548,7 @@ function App() {
                   </div>
                 )}
                 
-                {currentChat.messages.map(msg => (
+                {currentChat.messages.map((msg, index) => (
                   <div key={msg.id} className={`message ${msg.role}`}>
                     <div 
                       className="message-bubble markdown-content"
@@ -457,6 +557,20 @@ function App() {
                       }}
                     />
                     {msg.error && <div className="message-error">{msg.error}</div>}
+                    <div className="message-actions">
+                      <button 
+                        className="btn-fork" 
+                        onClick={() => {
+                          const title = prompt('Name this branch:', `${currentChat.title} (branch ${index + 1})`);
+                          if (title) {
+                            forkChat(currentChat.id, index, title);
+                          }
+                        }}
+                        title="Fork conversation from here"
+                      >
+                        Fork
+                      </button>
+                    </div>
                     <div className="message-meta">{formatTime(msg.createdAt)}</div>
                   </div>
                 ))}
