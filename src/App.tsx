@@ -87,7 +87,7 @@ function formatRelative(dateString: string) {
 
 // API Functions
 async function sendToModel(settings: Settings, messages: { role: string; content: string }[]) {
-  const response = await fetch(`${settings.baseUrl}/chat/completions`, {
+  const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
