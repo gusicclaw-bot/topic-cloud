@@ -34,6 +34,8 @@ interface Settings {
   baseUrl: string;
   model: string;
   apiKey: string;
+  braveApiKey: string;
+  enableWebSearch: boolean;
 }
 
 // Constants
@@ -51,6 +53,8 @@ const DEFAULT_SETTINGS: Settings = {
   baseUrl: 'http://localhost:1234/v1',
   model: 'default',
   apiKey: '',
+  braveApiKey: '',
+  enableWebSearch: false,
 };
 
 // Utilities
@@ -107,6 +111,32 @@ async function testConnection(settings: Settings) {
     headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
   });
   return response.ok;
+}
+
+async function searchWeb(apiKey: string, query: string): Promise<string> {
+  if (!apiKey) return '';
+  
+  try {
+    const response = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=3`, {
+      headers: {
+        'Accept': 'application/json',
+        'X-Subscription-Token': apiKey,
+      },
+    });
+    
+    if (!response.ok) return '';
+    
+    const data = await response.json();
+    const results = data.web?.results || [];
+    
+    if (results.length === 0) return '';
+    
+    return results.map((r: { title: string; description: string; url: string }) => 
+      `- ${r.title}: ${r.description} (${r.url})`
+    ).join('\n');
+  } catch {
+    return '';
+  }
 }
 
 // Main App
@@ -221,8 +251,17 @@ function App() {
     }));
 
     try {
+      // Auto web search if enabled
+      let searchContext = '';
+      if (settings.enableWebSearch && settings.braveApiKey) {
+        const searchResults = await searchWeb(settings.braveApiKey, text);
+        if (searchResults) {
+          searchContext = `\n\nRecent web search results for context:\n${searchResults}`;
+        }
+      }
+
       const messages = [
-        { role: 'system', content: `You are a helpful assistant. Current topic: ${currentTopic?.name}. Be concise and thoughtful.` },
+        { role: 'system', content: `You are a helpful assistant. Current topic: ${currentTopic?.name}. Be concise and thoughtful.${searchContext}` },
         ...currentChat!.messages.map(m => ({ role: m.role, content: m.text })),
         { role: 'user', content: text },
       ];
@@ -291,7 +330,7 @@ function App() {
     }
   }
 
-  function updateSettings(key: keyof Settings, value: string) {
+  function updateSettings(key: keyof Settings, value: string | boolean) {
     setSettings(prev => ({ ...prev, [key]: value }));
     setTestResult(null);
     setModelStatus('ready');
@@ -522,6 +561,35 @@ function App() {
             {testResult && (
               <div className={`connection-test-result ${testResult.includes('success') ? 'success' : 'error'}`}>
                 {testResult}
+              </div>
+            )}
+          </div>
+          
+          <div className="settings-section">
+            <h2>Web Search</h2>
+            <p style={{ marginBottom: 16 }}>Automatically search the web for context when you ask questions.</p>
+            
+            <div className="form-group">
+              <label className="toggle-label">
+                <input
+                  type="checkbox"
+                  checked={settings.enableWebSearch}
+                  onChange={e => updateSettings('enableWebSearch', e.target.checked)}
+                />
+                Enable auto web search
+              </label>
+            </div>
+            
+            {settings.enableWebSearch && (
+              <div className="form-group">
+                <label>Brave Search API Key</label>
+                <input
+                  type="password"
+                  value={settings.braveApiKey}
+                  onChange={e => updateSettings('braveApiKey', e.target.value)}
+                  placeholder="Get free key at brave.com/search/api"
+                />
+                <small>Free tier: 2000 queries/month. <a href="https://brave.com/search/api" target="_blank" rel="noopener">Get API key</a></small>
               </div>
             )}
           </div>
