@@ -4,7 +4,7 @@ const url = require('url');
 
 const PORT = 3001;
 const BRAVE_API_KEY = process.env.BRAVE_API_KEY || '';
-const LM_STUDIO_URL = process.env.LM_STUDIO_URL || 'http://localhost:1234/v1';
+const LM_STUDIO_URL = process.env.LM_STUDIO_URL || 'http://192.168.0.167:1234/v1';
 
 // CORS headers
 const corsHeaders = {
