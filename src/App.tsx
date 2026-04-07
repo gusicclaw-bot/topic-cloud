@@ -112,7 +112,7 @@ async function sendToModel(settings: Settings, messages: { role: string; content
 }
 
 async function testConnection(settings: Settings) {
-  const response = await fetch(`${settings.baseUrl}/models`, {
+  const response = await fetch(`${settings.baseUrl}/v1/models`, {
     headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
   });
   return response.ok;
