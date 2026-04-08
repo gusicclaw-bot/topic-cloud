@@ -217,8 +217,20 @@ function App() {
   const [testResult, setTestResult] = useState<string | null>(null);
   const [expandedChats, setExpandedChats] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile sidebar
+  const [isMobile, setIsMobile] = useState(false);
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  
+  // Detect mobile viewport
+  useEffect(() => {
+    const checkMobile = () => {
+      setIsMobile(window.innerWidth <= 430);
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, []);
 
   // Toggle expand/collapse for tree nodes
   function toggleExpanded(chatId: string) {
@@ -621,10 +633,18 @@ function App() {
 
         {/* Chat View */}
         <div className={`view chat-view ${view === 'chat' ? 'active' : ''}`}>
+          {/* Mobile Sidebar Overlay */}
+          {isMobile && sidebarOpen && (
+            <div 
+              className="sidebar-overlay active"
+              onClick={() => setSidebarOpen(false)}
+            />
+          )}
+          
           {/* Chat Layout with Sidebar */}
           <div className="chat-layout">
             {/* Left Sidebar - Tree View */}
-            <aside className={`chat-sidebar ${showSidebar ? 'open' : 'closed'}`}>
+            <aside className={`chat-sidebar ${isMobile ? (sidebarOpen ? 'open' : 'closed') : (showSidebar ? 'open' : 'closed')}`}>
               <div className="sidebar-header">
                 <div className="sidebar-title">
                   <h3>{currentTopic?.name || 'Conversations'}</h3>
@@ -640,7 +660,7 @@ function App() {
                   </button>
                   <button 
                     className="btn-icon"
-                    onClick={() => setShowSidebar(false)}
+                    onClick={() => isMobile ? setSidebarOpen(false) : setShowSidebar(false)}
                     title="Collapse sidebar"
                   >
                     ◀
@@ -665,14 +685,14 @@ function App() {
             
             {/* Main Chat Area */}
             <main className="chat-main">
-              {/* Collapsed sidebar toggle */}
-              {!showSidebar && (
+              {/* Collapsed sidebar toggle - shows on both mobile and desktop when sidebar hidden */}
+              {(isMobile ? !sidebarOpen : !showSidebar) && (
                 <button 
                   className="sidebar-toggle"
-                  onClick={() => setShowSidebar(true)}
+                  onClick={() => isMobile ? setSidebarOpen(true) : setShowSidebar(true)}
                   title="Show sidebar"
                 >
-                  ▶
+                  ☰
                 </button>
               )}
               
