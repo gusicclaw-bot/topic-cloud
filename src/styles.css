@@ -166,6 +166,7 @@ body {
   visibility: hidden;
   opacity: 0;
   pointer-events: none;
+  position: relative;
 }
 
 .view.active {
@@ -177,6 +178,7 @@ body {
   flex: 1;
   overflow: auto;
   padding: var(--space-xl);
+  position: relative;
 }
 
 /* Chat view handles its own scroll */
@@ -376,7 +378,11 @@ body {
   margin-top: var(--space-xs);
 }
 
-/* Composer */
+/* Composer - strictly hidden when chat not active */
+.view:not(.active) .composer {
+  display: none !important;
+}
+
 .composer {
   padding: var(--space-md) var(--space-lg);
   border-top: 1px solid var(--color-border);
@@ -914,12 +920,25 @@ body {
   }
 }
 
-/* Chat Layout with Sidebar */
+/* Chat Layout with Sidebar - strictly hidden when parent not active */
+.view:not(.active) .chat-layout {
+  display: none !important;
+}
+
 .chat-layout {
   display: flex;
   flex: 1;
   height: 100%;
   overflow: hidden;
+}
+
+/* Strictly hide all chat elements when view not active */
+.view:not(.active) .chat-sidebar,
+.view:not(.active) .chat-main,
+.view:not(.active) .chat-messages,
+.view:not(.active) .composer,
+.view:not(.active) .tree-container {
+  display: none !important;
 }
 
 .chat-sidebar {
