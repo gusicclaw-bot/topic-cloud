@@ -791,8 +791,14 @@ function App() {
 
         {/* Settings View */}
         <div className={`view settings-view ${view === 'settings' ? 'active' : ''}`}>
-          <div className="settings-section">
-            <h2>Model Settings</h2>
+          <div className="settings-header">
+            <h1>Settings</h1>
+            <p>Configure your AI model, web search, and data preferences</p>
+          </div>
+          
+          <div className="settings-grid">
+            <div className="settings-section">
+              <h2>Model Settings</h2>
             
             <div className="form-group">
               <label>Base URL</label>
@@ -834,10 +840,10 @@ function App() {
                 {testResult}
               </div>
             )}
-          </div>
-          
-          <div className="settings-section">
-            <h2>Web Search</h2>
+            </div>
+            
+            <div className="settings-section">
+              <h2>Web Search</h2>
             <p style={{ marginBottom: 16 }}>Automatically search the web for context when you ask questions.</p>
             
             <div className="form-group">
@@ -863,22 +869,23 @@ function App() {
                 <small>Free tier: 2000 queries/month. <a href="https://brave.com/search/api" target="_blank" rel="noopener">Get API key</a></small>
               </div>
             )}
-          </div>
-          
-          <div className="settings-section">
-            <h2>Data</h2>
-            <p style={{ marginBottom: 16 }}>All data is stored locally in your browser.</p>
-            <button 
-              className="btn-danger"
-              onClick={() => {
-                if (confirm('Clear all chats? This cannot be undone.')) {
-                  setChats([]);
-                  localStorage.removeItem('topic-cloud-v1');
-                }
-              }}
-            >
-              Clear All Data
-            </button>
+            </div>
+            
+            <div className="settings-section">
+              <h2>Data</h2>
+              <p>All data is stored locally in your browser.</p>
+              <button 
+                className="btn-danger"
+                onClick={() => {
+                  if (confirm('Clear all chats? This cannot be undone.')) {
+                    setChats([]);
+                    localStorage.removeItem('topic-cloud-v1');
+                  }
+                }}
+              >
+                Clear All Data
+              </button>
+            </div>
           </div>
         </div>
       </main>
