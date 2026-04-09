@@ -48,11 +48,15 @@ function formatRelative(dateString: string) {
 }
 
 // API Functions
+const PROXY_URL = 'http://localhost:3001';
+
 async function sendToModel(settings: Settings, messages: { role: string; content: string }[]) {
-  const response = await fetch(`${settings.baseUrl}/chat/completions`, {
+  // Route through proxy to avoid CORS
+  const response = await fetch(`${PROXY_URL}/llm/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
+      'X-LLM-Base-URL': settings.baseUrl,
       ...(settings.apiKey && { Authorization: `Bearer ${settings.apiKey}` }),
     },
     body: JSON.stringify({
@@ -60,7 +64,6 @@ async function sendToModel(settings: Settings, messages: { role: string; content
       messages,
       temperature: 0.7,
       max_tokens: 1000,
-      enableSearch: settings.enableWebSearch,
     }),
   });
 
@@ -74,31 +77,35 @@ async function sendToModel(settings: Settings, messages: { role: string; content
 }
 
 async function testConnection(settings: Settings) {
-  const response = await fetch(`${settings.baseUrl}/models`, {
-    headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
-  });
-  return response.ok;
+  try {
+    const response = await fetch(`${PROXY_URL}/proxy?url=${encodeURIComponent(`${settings.baseUrl}/models`)}`, {
+      headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
 }
 
 async function searchWeb(apiKey: string, query: string): Promise<string> {
   if (!apiKey) return '';
-  
+
   try {
-    const response = await fetch(`https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=3`, {
-      headers: {
-        'Accept': 'application/json',
-        'X-Subscription-Token': apiKey,
-      },
+    // Use proxy to hide API key and avoid CORS
+    const response = await fetch(`${PROXY_URL}/search`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query, apiKey }),
     });
-    
+
     if (!response.ok) return '';
-    
+
     const data = await response.json();
     const results = data.web?.results || [];
-    
+
     if (results.length === 0) return '';
-    
-    return results.map((r: { title: string; description: string; url: string }) => 
+
+    return results.map((r: { title: string; description: string; url: string }) =>
       `- ${r.title}: ${r.description} (${r.url})`
     ).join('\n');
   } catch {
