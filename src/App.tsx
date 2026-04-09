@@ -1,55 +1,17 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
-
-// Types
-type TopicId = 'golf' | 'football' | 'gaming' | 'work' | 'ideas' | 'learning';
-type View = 'landing' | 'chat' | 'settings';
-type ModelStatus = 'ready' | 'testing' | 'error';
-
-interface Topic {
-  id: TopicId;
-  name: string;
-  description: string;
-}
-
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  createdAt: string;
-  error?: string;
-}
-
-interface Chat {
-  id: string;
-  topicId: TopicId;
-  title: string;
-  messages: Message[];
-  createdAt: string;
-  updatedAt: string;
-  parentId?: string;        // For branching: which chat this forked from
-  branchPoint?: number;     // Message index where fork happened
-  tags: string[];           // Auto-generated tags
-  isArchived?: boolean;     // Soft delete
-}
-
-interface Settings {
-  providerLabel: string;
-  baseUrl: string;
-  model: string;
-  apiKey: string;
-  braveApiKey: string;
-  enableWebSearch: boolean;
-}
+import './styles.css';
+import type { TopicId, View, ModelStatus, ModalState, Topic, Message, Chat, Settings } from './types';
+import { auth, chatApi } from './pocketbase';
 
 // Constants
 const TOPICS: Topic[] = [
-  { id: 'golf', name: 'Golf', description: 'Swing thoughts and practice notes' },
-  { id: 'football', name: 'Football', description: 'Matches, tactics, and analysis' },
-  { id: 'gaming', name: 'Gaming', description: 'What to play next' },
-  { id: 'work', name: 'Work', description: 'Projects and decisions' },
-  { id: 'ideas', name: 'Ideas', description: 'Loose thoughts and sparks' },
-  { id: 'learning', name: 'Learning', description: 'Notes and insights' },
+  { id: 'golf', name: 'Golf', description: 'Swing thoughts and practice notes', icon: 'sports_golf' },
+  { id: 'football', name: 'Football', description: 'Matches, tactics, and analysis', icon: 'sports_soccer' },
+  { id: 'gaming', name: 'Gaming', description: 'What to play next', icon: 'sports_esports' },
+  { id: 'work', name: 'Work', description: 'Projects and decisions', icon: 'work' },
+  { id: 'ideas', name: 'Ideas', description: 'Loose thoughts and sparks', icon: 'lightbulb' },
+  { id: 'learning', name: 'Learning', description: 'Notes and insights', icon: 'school' },
 ];
 
 const DEFAULT_SETTINGS: Settings = {
@@ -87,7 +49,7 @@ function formatRelative(dateString: string) {
 
 // API Functions
 async function sendToModel(settings: Settings, messages: { role: string; content: string }[]) {
-  const response = await fetch(`${settings.baseUrl}/v1/chat/completions`, {
+  const response = await fetch(`${settings.baseUrl}/chat/completions`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -112,7 +74,7 @@ async function sendToModel(settings: Settings, messages: { role: string; content
 }
 
 async function testConnection(settings: Settings) {
-  const response = await fetch(`${settings.baseUrl}/v1/models`, {
+  const response = await fetch(`${settings.baseUrl}/models`, {
     headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
   });
   return response.ok;
@@ -149,10 +111,8 @@ interface TreeNode {
   chat: Chat;
   children: TreeNode[];
   depth: number;
-  isExpanded: boolean;
 }
 
-// Build tree structure from flat chats
 function buildChatTree(chats: Chat[]): TreeNode[] {
   const chatMap = new Map<string, Chat>();
   const childrenMap = new Map<string, string[]>();
@@ -181,15 +141,9 @@ function buildChatTree(chats: Chat[]): TreeNode[] {
       .map(id => buildNode(id, depth + 1))
       .filter((n): n is TreeNode => n !== null);
     
-    return {
-      chat,
-      children,
-      depth,
-      isExpanded: true,
-    };
+    return { chat, children, depth };
   }
   
-  // Find roots (chats without parents, or parents not in current topic)
   chats.forEach(chat => {
     if (!chat.parentId || !chatMap.has(chat.parentId)) {
       const node = buildNode(chat.id, 0);
@@ -197,15 +151,142 @@ function buildChatTree(chats: Chat[]): TreeNode[] {
     }
   });
   
-  // Sort by date
   roots.sort((a, b) => new Date(b.chat.updatedAt).getTime() - new Date(a.chat.updatedAt).getTime());
   
   return roots;
 }
 
+// Terminal Log Component
+function TerminalLog({ modelStatus, lastAction }: { modelStatus: ModelStatus; lastAction: string }) {
+  const [logs, setLogs] = useState<string[]>([
+    'TOPIC_CLOUD_V2_INIT...',
+    '> Synthetic Architect system loaded',
+    '> Context engine: online',
+    '> Neural mesh: synchronized',
+  ]);
+  
+  useEffect(() => {
+    if (lastAction) {
+      setLogs(prev => [...prev.slice(-4), `> ${lastAction}`]);
+    }
+  }, [lastAction]);
+  
+  return (
+    <div className="fixed right-6 bottom-6 w-80 bg-black/60 backdrop-blur-sm p-4 font-mono text-2xs text-synth-text-secondary border border-synth-border-subtle z-50 pointer-events-none">
+      <div className="text-synth-cyan mb-2">ARCHITECT_SYSTEM_V2_INIT...</div>
+      {logs.map((log, i) => (
+        <div key={i} className={log.includes('>') ? '' : 'text-synth-text-muted'}>{log}</div>
+      ))}
+      <div className="text-synth-cyan animate-terminal-blink mt-1">_</div>
+    </div>
+  );
+}
+
+// Modal Component
+function Modal({ modal, onClose }: { modal: ModalState; onClose: () => void }) {
+  const [inputValue, setInputValue] = useState(modal.defaultValue || '');
+  
+  useEffect(() => {
+    setInputValue(modal.defaultValue || '');
+  }, [modal.defaultValue]);
+  
+  if (!modal.isOpen) return null;
+  
+  const handleConfirm = () => {
+    if (modal.type === 'prompt') {
+      modal.onConfirm?.(inputValue);
+    } else {
+      modal.onConfirm?.();
+    }
+    onClose();
+  };
+  
+  const handleCancel = () => {
+    modal.onCancel?.();
+    onClose();
+  };
+  
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+      {/* Backdrop */}
+      <div 
+        className="absolute inset-0 bg-black/70 backdrop-blur-sm"
+        onClick={handleCancel}
+      />
+      
+      {/* Modal */}
+      <div className="relative bg-synth-surface border border-synth-border w-full max-w-md m-4 shadow-2xl">
+        {/* Traveling border glow effect */}
+        <div className="modal-border-light top" />
+        <div className="modal-border-light right" />
+        <div className="modal-border-light bottom" />
+        <div className="modal-border-light left" />
+        {/* Header */}
+        <div className="flex items-center justify-between px-6 py-4 border-b border-synth-border-subtle bg-synth-surface-high">
+          <div className="flex items-center gap-3">
+            <span className="material-symbols-outlined text-synth-cyan">
+              {modal.type === 'confirm' ? 'help' : modal.type === 'prompt' ? 'edit' : 'info'}
+            </span>
+            <h3 className="font-headline text-sm font-bold tracking-wider uppercase">
+              {modal.title}
+            </h3>
+          </div>
+          <button 
+            onClick={handleCancel}
+            className="text-synth-text-secondary hover:text-synth-text transition-colors"
+          >
+            <span className="material-symbols-outlined">close</span>
+          </button>
+        </div>
+        
+        {/* Content */}
+        <div className="p-6">
+          <p className="text-synth-text-secondary text-sm leading-relaxed mb-4">
+            {modal.message}
+          </p>
+          
+          {modal.type === 'prompt' && (
+            <input
+              type="text"
+              value={inputValue}
+              onChange={(e) => setInputValue(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleConfirm()}
+              className="w-full bg-synth-bg border border-synth-border text-synth-text px-4 py-3 text-sm focus:outline-none focus:border-synth-cyan placeholder-synth-text-muted"
+              placeholder="Enter value..."
+              autoFocus
+            />
+          )}
+        </div>
+        
+        {/* Actions */}
+        <div className="flex justify-end gap-3 px-6 py-4 border-t border-synth-border-subtle bg-synth-surface-high/50">
+          {modal.type !== 'alert' && (
+            <button 
+              onClick={handleCancel}
+              className="btn-synth-secondary"
+            >
+              {modal.cancelLabel || 'CANCEL'}
+            </button>
+          )}
+          <button 
+            onClick={handleConfirm}
+            className={`btn-synth-primary ${modal.type === 'confirm' ? 'border-synth-error hover:bg-synth-error/20' : ''}`}
+          >
+            {modal.confirmLabel || (modal.type === 'prompt' ? 'CONFIRM' : 'OK')}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // Main App
 function App() {
-  // State
+  // Auth state
+  const [isAuthenticated, setIsAuthenticated] = useState(auth.isValid());
+  const [isLoadingChats, setIsLoadingChats] = useState(false);
+
+  // App state
   const [view, setView] = useState<View>('landing');
   const [activeTopic, setActiveTopic] = useState<TopicId | null>(null);
   const [activeChat, setActiveChat] = useState<string | null>(null);
@@ -216,31 +297,219 @@ function App() {
   const [modelStatus, setModelStatus] = useState<ModelStatus>('ready');
   const [testResult, setTestResult] = useState<string | null>(null);
   const [expandedChats, setExpandedChats] = useState<Set<string>>(new Set());
-  const [showSidebar, setShowSidebar] = useState(true);
-  const [sidebarOpen, setSidebarOpen] = useState(false); // Mobile sidebar
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
-  
+  const [lastAction, setLastAction] = useState('');
+  const [modal, setModal] = useState<ModalState>({ isOpen: false, type: 'alert', title: '', message: '' });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
-  // Detect mobile viewport
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 430);
+  // Modal helpers
+  const showConfirm = (title: string, message: string, onConfirm: () => void, onCancel?: () => void) => {
+    setModal({
+      isOpen: true,
+      type: 'confirm',
+      title,
+      message,
+      confirmLabel: 'CONFIRM',
+      cancelLabel: 'CANCEL',
+      onConfirm,
+      onCancel: onCancel || (() => setModal(m => ({ ...m, isOpen: false }))),
+    });
+  };
+  
+  const showPrompt = (title: string, message: string, defaultValue: string, onConfirm: (value: string) => void, onCancel?: () => void) => {
+    setModal({
+      isOpen: true,
+      type: 'prompt',
+      title,
+      message,
+      defaultValue,
+      confirmLabel: 'CONFIRM',
+      cancelLabel: 'CANCEL',
+      onConfirm: (value) => onConfirm(value || ''),
+      onCancel: onCancel || (() => setModal(m => ({ ...m, isOpen: false }))),
+    });
+  };
+  
+  const showAlert = (title: string, message: string) => {
+    setModal({
+      isOpen: true,
+      type: 'alert',
+      title,
+      message,
+      confirmLabel: 'OK',
+      onConfirm: () => setModal(m => ({ ...m, isOpen: false })),
+    });
+  };
+  
+  const closeModal = () => {
+    setModal(m => ({ ...m, isOpen: false }));
+  };
+
+  // Auth View Component
+  function AuthView({ onLogin }: { onLogin: () => void }) {
+    const [isLogin, setIsLogin] = useState(true);
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [username, setUsername] = useState('');
+    const [error, setError] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+
+    const handleSubmit = async (e: React.FormEvent) => {
+      e.preventDefault();
+      setError('');
+      setIsLoading(true);
+
+      try {
+        if (isLogin) {
+          await auth.login(email, password);
+        } else {
+          await auth.signUp(email, password, username);
+          await auth.login(email, password);
+        }
+        onLogin();
+      } catch (err: any) {
+        setError(err.message || 'Authentication failed');
+      } finally {
+        setIsLoading(false);
+      }
     };
+
+    return (
+      <div className="flex-1 flex flex-col relative overflow-hidden">
+        {/* Grid Background */}
+        <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-grid" />
+
+        <div className="flex-1 flex items-center justify-center p-6 relative z-10">
+          <div className="relative bg-synth-surface border border-synth-border w-full max-w-md m-4 shadow-2xl">
+            {/* Traveling border glow effect */}
+            <div className="modal-border-light top" />
+            <div className="modal-border-light right" />
+            <div className="modal-border-light bottom" />
+            <div className="modal-border-light left" />
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-synth-border-subtle bg-synth-surface-high">
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined text-synth-cyan">
+                  {isLogin ? 'login' : 'person_add'}
+                </span>
+                <h3 className="font-headline text-sm font-bold tracking-wider uppercase">
+                  {isLogin ? 'SYSTEM_LOGIN' : 'CREATE_ACCOUNT'}
+                </h3>
+              </div>
+            </div>
+
+            {/* Content */}
+            <div className="p-6">
+              <form onSubmit={handleSubmit} className="space-y-4">
+                {!isLogin && (
+                  <div>
+                    <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                      Username
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Enter username"
+                      value={username}
+                      onChange={(e) => setUsername(e.target.value)}
+                      className="input-synth"
+                      required={!isLogin}
+                    />
+                  </div>
+                )}
+
+                <div>
+                  <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                    Email
+                  </label>
+                  <input
+                    type="email"
+                    placeholder="Enter email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    className="input-synth"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                    Password
+                  </label>
+                  <input
+                    type="password"
+                    placeholder="Enter password"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="input-synth"
+                    required
+                  />
+                </div>
+
+                {error && (
+                  <div className="p-3 bg-synth-error/20 border border-synth-error text-synth-error-text text-xs">
+                    ERROR: {error}
+                  </div>
+                )}
+
+                <button
+                  type="submit"
+                  className="btn-synth-primary w-full justify-center"
+                  disabled={isLoading}
+                >
+                  {isLoading ? (
+                    <span className="animate-pulse">AUTHENTICATING...</span>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">
+                        {isLogin ? 'login' : 'person_add'}
+                      </span>
+                      {isLogin ? 'LOGIN' : 'CREATE_ACCOUNT'}
+                    </>
+                  )}
+                </button>
+              </form>
+
+              <button
+                onClick={() => {
+                  setIsLogin(!isLogin);
+                  setError('');
+                }}
+                className="btn-synth-ghost w-full mt-4"
+              >
+                {isLogin ? 'Need account? Register' : 'Have account? Login'}
+              </button>
+            </div>
+
+            {/* Footer info */}
+            <div className="px-6 py-3 border-t border-synth-border-subtle bg-synth-surface-high/50">
+              <p className="text-2xs text-synth-text-muted text-center font-mono">
+                SECURE_CONNECTION // POCKETBASE_AUTH
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // Detect mobile
+  useEffect(() => {
+    const checkMobile = () => setIsMobile(window.innerWidth <= 768);
     checkMobile();
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
 
-  // Toggle expand/collapse for tree nodes
+  // Toggle expand for tree
   function toggleExpanded(chatId: string) {
     setExpandedChats(prev => {
       const next = new Set(prev);
-      if (next.has(chatId)) {
-        next.delete(chatId);
-      } else {
-        next.add(chatId);
-      }
+      if (next.has(chatId)) next.delete(chatId);
+      else next.add(chatId);
       return next;
     });
   }
@@ -255,39 +524,37 @@ function App() {
           const isActive = node.chat.id === activeChat;
           
           return (
-            <div key={node.chat.id} className="tree-node">
+            <div key={node.chat.id}>
               <div 
-                className={`tree-item ${isActive ? 'active' : ''} ${node.chat.parentId ? 'is-branch' : ''}`}
-                style={{ paddingLeft: `${level * 20 + 12}px` }}
+                className={`tree-item ${isActive ? 'tree-item-active' : ''} ${node.chat.parentId ? 'tree-item-branch' : ''}`}
+                style={{ paddingLeft: `${level * 16 + 16}px` }}
                 onClick={() => selectChat(node.chat.id)}
               >
-                {/* Expand/collapse button */}
                 {hasChildren && (
                   <button 
-                    className="tree-toggle"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      toggleExpanded(node.chat.id);
-                    }}
+                    className="w-4 h-4 flex items-center justify-center text-synth-text-muted hover:text-synth-text"
+                    onClick={(e) => { e.stopPropagation(); toggleExpanded(node.chat.id); }}
                   >
-                    {isExpanded ? '▼' : '▶'}
+                    <span className="material-symbols-outlined text-xs">
+                      {isExpanded ? 'expand_more' : 'chevron_right'}
+                    </span>
                   </button>
                 )}
-                {!hasChildren && <span className="tree-spacer" />}
+                {!hasChildren && <span className="w-4" />}
                 
-                {/* Branch indicator */}
-                {node.chat.parentId && <span className="tree-branch-icon">⟿</span>}
+                {node.chat.parentId && (
+                  <span className="material-symbols-outlined text-xs text-synth-cyan">alt_route</span>
+                )}
                 
-                {/* Title */}
-                <span className="tree-title">{node.chat.title}</span>
+                <span className="flex-1 text-xs truncate">{node.chat.title}</span>
                 
-                {/* Message count */}
-                <span className="tree-count">{node.chat.messages.length}</span>
+                <span className="text-2xs px-1.5 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
+                  {node.chat.messages.length}
+                </span>
               </div>
               
-              {/* Children */}
               {hasChildren && isExpanded && (
-                <div className="tree-children">
+                <div className="border-l border-synth-border ml-5">
                   <TreeView nodes={node.children} level={level + 1} />
                 </div>
               )}
@@ -299,16 +566,8 @@ function App() {
   }
 
   // Derived state
-  const currentTopic = useMemo(() => 
-    TOPICS.find(t => t.id === activeTopic),
-    [activeTopic]
-  );
-
-  const currentChat = useMemo(() =>
-    chats.find(c => c.id === activeChat),
-    [chats, activeChat]
-  );
-
+  const currentTopic = useMemo(() => TOPICS.find(t => t.id === activeTopic), [activeTopic]);
+  const currentChat = useMemo(() => chats.find(c => c.id === activeChat), [chats, activeChat]);
   const topicChats = useMemo(() =>
     chats.filter(c => c.topicId === activeTopic).sort((a, b) => 
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
@@ -317,22 +576,53 @@ function App() {
   );
 
   // Effects
+  // Load chats from server when authenticated
   useEffect(() => {
-    const saved = localStorage.getItem('topic-cloud-v1');
+    if (!isAuthenticated) return;
+
+    const loadChats = async () => {
+      setIsLoadingChats(true);
+      try {
+        const serverChats = await chatApi.getChats();
+
+        // Load messages for each chat
+        const chatsWithMessages = await Promise.all(
+          serverChats.map(async (chat) => ({
+            ...chat,
+            messages: await chatApi.getMessages(chat.id),
+          }))
+        );
+
+        setChats(chatsWithMessages);
+        setLastAction('Data synchronized from server');
+      } catch (err: any) {
+        setLastAction('Failed to load chats: ' + err.message);
+      } finally {
+        setIsLoadingChats(false);
+      }
+    };
+
+    loadChats();
+  }, [isAuthenticated]);
+
+  // Load settings from localStorage (fallback, can be moved to server too)
+  useEffect(() => {
+    if (!isAuthenticated) return;
+
+    const saved = localStorage.getItem('topic-cloud-settings');
     if (saved) {
       try {
         const data = JSON.parse(saved);
-        setChats(data.chats || []);
-        setSettings({ ...DEFAULT_SETTINGS, ...data.settings });
-      } catch {
-        // ignore
-      }
+        setSettings({ ...DEFAULT_SETTINGS, ...data });
+      } catch {}
     }
-  }, []);
+  }, [isAuthenticated]);
 
+  // Save settings to localStorage
   useEffect(() => {
-    localStorage.setItem('topic-cloud-v1', JSON.stringify({ chats, settings }));
-  }, [chats, settings]);
+    if (!isAuthenticated) return;
+    localStorage.setItem('topic-cloud-settings', JSON.stringify(settings));
+  }, [settings, isAuthenticated]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -343,116 +633,70 @@ function App() {
     setActiveTopic(topicId);
     setActiveChat(null);
     setView('chat');
+    setLastAction(`Entering topic: ${topicId.toUpperCase()}`);
   }
 
   function selectChat(chatId: string) {
     setActiveChat(chatId);
     const chat = chats.find(c => c.id === chatId);
-    if (chat) {
-      setActiveTopic(chat.topicId);
+    if (chat) setActiveTopic(chat.topicId);
+    if (isMobile) setMobileSidebarOpen(false);
+  }
+
+  async function createNewChat() {
+    if (!activeTopic) return;
+
+    try {
+      const newChat = await chatApi.createChat({
+        topicId: activeTopic,
+        title: 'New conversation',
+        messages: [],
+        tags: [],
+      });
+
+      setChats(prev => [newChat, ...prev]);
+      setActiveChat(newChat.id);
+      setLastAction('Created new chat thread');
+    } catch (err: any) {
+      setLastAction('Failed to create chat: ' + err.message);
     }
   }
 
-  function createNewChat() {
-    if (!activeTopic) return;
-    
-    const newChat: Chat = {
-      id: createId('chat'),
-      topicId: activeTopic,
-      title: 'New conversation',
-      messages: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      tags: [],
-    };
-    
-    setChats(prev => [newChat, ...prev]);
-    setActiveChat(newChat.id);
-  }
-
-  function forkChat(chatId: string, messageIndex: number, newTitle?: string) {
+  async function forkChat(chatId: string, messageIndex: number, newTitle?: string) {
     const sourceChat = chats.find(c => c.id === chatId);
     if (!sourceChat) return;
 
-    // Create forked chat with messages up to branch point
-    const forkedChat: Chat = {
-      id: createId('chat'),
-      topicId: sourceChat.topicId,
-      title: newTitle || `${sourceChat.title} (fork)`,
-      messages: sourceChat.messages.slice(0, messageIndex + 1),
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      parentId: sourceChat.id,
-      branchPoint: messageIndex,
-      tags: [...sourceChat.tags],
-    };
+    try {
+      const forkedChat = await chatApi.createChat({
+        topicId: sourceChat.topicId,
+        title: newTitle || `${sourceChat.title} (fork)`,
+        messages: [],
+        parentId: sourceChat.id,
+        branchPoint: messageIndex,
+        tags: [...sourceChat.tags],
+      });
 
-    setChats(prev => [forkedChat, ...prev]);
-    setActiveChat(forkedChat.id);
-    return forkedChat.id;
-  }
-
-  function mergeChats(targetChatId: string, sourceChatId: string) {
-    const targetChat = chats.find(c => c.id === targetChatId);
-    const sourceChat = chats.find(c => c.id === sourceChatId);
-    if (!targetChat || !sourceChat) return;
-
-    // Combine unique tags
-    const mergedTags = [...new Set([...targetChat.tags, ...sourceChat.tags])];
-
-    // Add merge marker message
-    const mergeMessage: Message = {
-      id: createId('msg'),
-      role: 'assistant',
-      text: `--- Merged from "${sourceChat.title}" ---\n\n${sourceChat.messages.map(m => `${m.role}: ${m.text}`).join('\n\n')}`,
-      createdAt: new Date().toISOString(),
-    };
-
-    setChats(prev => prev.map(chat => {
-      if (chat.id === targetChatId) {
-        return {
-          ...chat,
-          messages: [...chat.messages, mergeMessage],
-          tags: mergedTags,
-          updatedAt: new Date().toISOString(),
-        };
+      // Copy messages up to branch point
+      const messagesToCopy = sourceChat.messages.slice(0, messageIndex + 1);
+      for (const msg of messagesToCopy) {
+        await chatApi.createMessage(forkedChat.id, {
+          role: msg.role,
+          text: msg.text,
+          error: msg.error,
+          model: msg.model,
+        });
       }
-      return chat;
-    }));
-  }
 
-  async function autoTagChat(chatId: string) {
-    const chat = chats.find(c => c.id === chatId);
-    if (!chat || chat.messages.length === 0) return;
+      // Reload messages for the forked chat
+      const messages = await chatApi.getMessages(forkedChat.id);
+      forkedChat.messages = messages;
 
-    // Simple keyword-based tagging for now
-    const allText = chat.messages.map(m => m.text).join(' ').toLowerCase();
-    const tags: string[] = [];
-
-    // Extract potential tags from content
-    if (allText.includes('code') || allText.includes('programming') || allText.includes('function')) {
-      tags.push('coding');
+      setChats(prev => [{ ...forkedChat, messages }, ...prev]);
+      setActiveChat(forkedChat.id);
+      setLastAction(`Forked chat: ${forkedChat.id.slice(0, 8)}`);
+    } catch (err: any) {
+      setLastAction('Failed to fork chat: ' + err.message);
     }
-    if (allText.includes('idea') || allText.includes('concept') || allText.includes('think')) {
-      tags.push('ideas');
-    }
-    if (allText.includes('plan') || allText.includes('schedule') || allText.includes('todo')) {
-      tags.push('planning');
-    }
-    if (allText.includes('question') || allText.includes('how') || allText.includes('what')) {
-      tags.push('questions');
-    }
-    if (allText.includes('bug') || allText.includes('error') || allText.includes('fix')) {
-      tags.push('debugging');
-    }
-
-    // Add date-based tag
-    const date = new Date(chat.createdAt);
-    tags.push(date.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
-
-    setChats(prev => prev.map(c => 
-      c.id === chatId ? { ...c, tags: [...new Set([...c.tags, ...tags])] } : c
-    ));
   }
 
   async function sendMessage() {
@@ -462,48 +706,45 @@ function App() {
     setInput('');
     setIsSending(true);
     setModelStatus('testing');
-
-    const userMessage: Message = {
-      id: createId('msg'),
-      role: 'user',
-      text,
-      createdAt: new Date().toISOString(),
-    };
-
-    // Update chat with user message
-    setChats(prev => prev.map(chat => {
-      if (chat.id !== activeChat) return chat;
-      return {
-        ...chat,
-        messages: [...chat.messages, userMessage],
-        updatedAt: new Date().toISOString(),
-      };
-    }));
+    setLastAction('Sending message to model...');
 
     try {
-      // Auto web search if enabled
+      // Save user message to server
+      const userMessage = await chatApi.createMessage(activeChat, {
+        role: 'user',
+        text,
+      });
+
+      setChats(prev => prev.map(chat => {
+        if (chat.id !== activeChat) return chat;
+        return {
+          ...chat,
+          messages: [...chat.messages, userMessage],
+          updatedAt: new Date().toISOString(),
+        };
+      }));
+
       let searchContext = '';
       if (settings.enableWebSearch && settings.braveApiKey) {
+        setLastAction('Performing web search...');
         const searchResults = await searchWeb(settings.braveApiKey, text);
-        if (searchResults) {
-          searchContext = `\n\nRecent web search results for context:\n${searchResults}`;
-        }
+        if (searchResults) searchContext = `\n\nWeb search context:\n${searchResults}`;
       }
 
       const messages = [
-        { role: 'system', content: `You are a helpful assistant. Current topic: ${currentTopic?.name}. Be concise and thoughtful.${searchContext}` },
+        { role: 'system', content: `You are a helpful assistant. Topic: ${currentTopic?.name}.${searchContext}` },
         ...currentChat!.messages.map(m => ({ role: m.role, content: m.text })),
         { role: 'user', content: text },
       ];
 
       const response = await sendToModel(settings, messages);
 
-      const assistantMessage: Message = {
-        id: createId('msg'),
+      // Save assistant response to server
+      const assistantMessage = await chatApi.createMessage(activeChat, {
         role: 'assistant',
         text: response,
-        createdAt: new Date().toISOString(),
-      };
+        model: settings.model,
+      });
 
       setChats(prev => prev.map(chat => {
         if (chat.id !== activeChat) return chat;
@@ -515,16 +756,16 @@ function App() {
       }));
 
       setModelStatus('ready');
+      setLastAction('Response received');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to send';
-      
-      const errorMsg: Message = {
-        id: createId('msg'),
+
+      // Save error message to server
+      const errorMsg = await chatApi.createMessage(activeChat, {
         role: 'assistant',
-        text: 'Sorry, I could not process that request.',
-        createdAt: new Date().toISOString(),
+        text: 'Request failed. Check connection settings.',
         error: errorMessage,
-      };
+      });
 
       setChats(prev => prev.map(chat => {
         if (chat.id !== activeChat) return chat;
@@ -536,6 +777,7 @@ function App() {
       }));
 
       setModelStatus('error');
+      setLastAction(`Error: ${errorMessage.slice(0, 30)}...`);
     } finally {
       setIsSending(false);
     }
@@ -544,19 +786,23 @@ function App() {
   async function runTest() {
     setTestResult(null);
     setModelStatus('testing');
+    setLastAction('Testing model connection...');
     
     try {
       const ok = await testConnection(settings);
       if (ok) {
-        setTestResult('Connection successful');
+        setTestResult('Connection established');
         setModelStatus('ready');
+        setLastAction('Connection test: SUCCESS');
       } else {
         setTestResult('Connection failed');
         setModelStatus('error');
+        setLastAction('Connection test: FAILED');
       }
     } catch {
-      setTestResult('Connection failed - check your settings');
+      setTestResult('Connection failed - check settings');
       setModelStatus('error');
+      setLastAction('Connection test: ERROR');
     }
   }
 
@@ -566,115 +812,167 @@ function App() {
     setModelStatus('ready');
   }
 
-  function goBack() {
-    setView('landing');
-    setActiveTopic(null);
-    setActiveChat(null);
-  }
+  const getStatusDot = () => {
+    switch (modelStatus) {
+      case 'ready': return <span className="w-2 h-2 rounded-full status-ready" />;
+      case 'testing': return <span className="w-2 h-2 rounded-full status-testing" />;
+      case 'error': return <span className="w-2 h-2 rounded-full status-error" />;
+      default: return <span className="w-2 h-2 rounded-full status-offline" />;
+    }
+  };
+
+  const getStatusText = () => {
+    switch (modelStatus) {
+      case 'ready': return 'SYSTEM_READY';
+      case 'testing': return 'PROCESSING...';
+      case 'error': return 'CONNECTION_ERROR';
+      default: return 'OFFLINE';
+    }
+  };
 
   // Render
-  return (
-    <div className="shell">
-      {/* Navigation Rail */}
-      <nav className="nav-rail">
-        <div className="nav-logo">TC</div>
-        
-        <button 
-          className={`nav-item ${view === 'landing' ? 'active' : ''}`}
-          onClick={() => setView('landing')}
-          title="Home"
-        >
-          ◆
-        </button>
-        
-        <button 
-          className={`nav-item ${view === 'chat' ? 'active' : ''}`}
-          onClick={() => activeTopic ? setView('chat') : setView('landing')}
-          title="Chat"
-        >
-          ◇
-        </button>
-        
-        <button 
-          className={`nav-item ${view === 'settings' ? 'active' : ''}`}
-          onClick={() => setView('settings')}
-          title="Settings"
-        >
-          ○
-        </button>
-      </nav>
+  if (!isAuthenticated) {
+    return <AuthView onLogin={() => setIsAuthenticated(true)} />;
+  }
 
-      {/* Main Content */}
-      <main className="main-content">
-        {/* Landing View */}
-        <div className={`view landing-view ${view === 'landing' ? 'active' : ''}`}>
-          <div className="landing-header">
-            <h1>Topic Cloud</h1>
-            <p>Organize your thoughts by topic. Start a conversation in any room.</p>
-          </div>
-          
-          <div className="topics-grid">
-            {TOPICS.map(topic => {
-              const count = chats.filter(c => c.topicId === topic.id).length;
-              return (
-                <button 
-                  key={topic.id} 
-                  className="topic-card"
-                  onClick={() => startChat(topic.id)}
-                >
-                  <h3>{topic.name}</h3>
-                  <p>{topic.description}</p>
-                  <div className="count">{count} {count === 1 ? 'chat' : 'chats'}</div>
-                </button>
-              );
-            })}
+  return (
+    <div className="h-screen flex flex-col bg-synth-bg overflow-hidden">
+      {/* Header */}
+      <header className="h-16 bg-synth-bg border-b border-synth-border-subtle flex items-center justify-between px-6 fixed top-0 left-0 right-0 z-50">
+        <div className="flex items-center gap-4">
+          <span className="font-headline text-lg font-bold tracking-widest text-synth-text">TOPIC_CLOUD</span>
+          <span className="text-synth-cyan text-xs">//</span>
+          <span className="text-synth-text-secondary text-xs tracking-wider">SYNTHETIC_ARCHITECT_V2</span>
+          {auth.getUser() && (
+            <span className="text-2xs text-synth-text-muted font-mono ml-2">
+              USER: {auth.getUser()?.username?.toUpperCase()}
+            </span>
+          )}
+        </div>
+        
+        <div className="flex-1 max-w-xl mx-8">
+          <div className="flex items-center bg-synth-surface px-4 py-2 border border-synth-border-subtle">
+            <span className="material-symbols-outlined text-synth-text-muted text-sm mr-2">terminal</span>
+            <span className="text-2xs text-synth-text-muted font-mono tracking-wider uppercase">
+              SYSTEM_PATH: /{view.toUpperCase()}{activeTopic ? `/${activeTopic.toUpperCase()}` : ''}
+            </span>
           </div>
         </div>
+        
+        <div className="flex items-center gap-4">
+          <button 
+            className={`p-2 transition-colors ${view === 'landing' ? 'text-synth-cyan' : 'text-synth-text-secondary hover:text-synth-text'}`}
+            onClick={() => setView('landing')}
+          >
+            <span className="material-symbols-outlined">home</span>
+          </button>
+          <button 
+            className={`p-2 transition-colors ${view === 'chat' ? 'text-synth-cyan' : 'text-synth-text-secondary hover:text-synth-text'}`}
+            onClick={() => activeTopic ? setView('chat') : setView('landing')}
+          >
+            <span className="material-symbols-outlined">chat</span>
+          </button>
+          <button 
+            className={`p-2 transition-colors ${view === 'settings' ? 'text-synth-cyan' : 'text-synth-text-secondary hover:text-synth-text'}`}
+            onClick={() => setView('settings')}
+          >
+            <span className="material-symbols-outlined">settings</span>
+          </button>
+        </div>
+      </header>
 
-        {/* Chat View */}
-        <div className={`view chat-view ${view === 'chat' ? 'active' : ''}`}>
-          {/* Mobile Sidebar Overlay */}
-          {isMobile && sidebarOpen && (
-            <div 
-              className="sidebar-overlay active"
-              onClick={() => setSidebarOpen(false)}
-            />
-          )}
-          
-          {/* Chat Layout with Sidebar */}
-          <div className="chat-layout">
-            {/* Left Sidebar - Tree View */}
-            <aside className={`chat-sidebar ${isMobile ? (sidebarOpen ? 'open' : 'closed') : (showSidebar ? 'open' : 'closed')}`}>
-              <div className="sidebar-header">
-                <div className="sidebar-title">
-                  <h3>{currentTopic?.name || 'Conversations'}</h3>
-                  <span className="chat-count">{topicChats.length}</span>
-                </div>
-                <div className="sidebar-actions">
-                  <button 
-                    className="btn-icon" 
-                    onClick={createNewChat}
-                    title="New conversation"
-                  >
-                    +
-                  </button>
-                  <button 
-                    className="btn-icon"
-                    onClick={() => isMobile ? setSidebarOpen(false) : setShowSidebar(false)}
-                    title="Collapse sidebar"
-                  >
-                    ◀
-                  </button>
-                </div>
+      {/* Main Content */}
+      <main className="flex-1 mt-16 flex overflow-hidden">
+        {/* Landing View */}
+        {view === 'landing' && (
+          <div className="flex-1 flex flex-col relative overflow-auto">
+            {/* Grid Background */}
+            <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-grid" />
+            
+            <div className="flex-1 flex flex-col items-center justify-center p-12 relative z-10">
+              <div className="text-center mb-12">
+                <h1 className="font-headline text-4xl font-bold tracking-tight mb-4">
+                  <span className="text-synth-text">TOPIC</span>
+                  <span className="text-synth-cyan glow-cyan">_CLOUD</span>
+                </h1>
+                <p className="text-synth-text-secondary text-sm tracking-wider">
+                  ORGANIZE YOUR THOUGHTS // ACCESS THE NEURAL_MESH
+                </p>
               </div>
               
-              {/* Tree View */}
-              <div className="tree-container">
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-4xl">
+                {TOPICS.map(topic => {
+                  const count = chats.filter(c => c.topicId === topic.id).length;
+                  return (
+                    <button 
+                      key={topic.id} 
+                      className="topic-card text-left group"
+                      onClick={() => startChat(topic.id)}
+                    >
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="material-symbols-outlined text-synth-cyan group-hover:glow-cyan transition-all">
+                          {topic.icon}
+                        </span>
+                        <h3 className="font-headline text-sm font-semibold tracking-wider">{topic.name.toUpperCase()}</h3>
+                      </div>
+                      <p className="text-synth-text-secondary text-xs mb-3">{topic.description}</p>
+                      <div className="text-2xs text-synth-text-muted font-mono">
+                        {count} THREAD{count !== 1 ? 'S' : ''}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Chat View */}
+        {view === 'chat' && (
+          <div className="flex-1 flex overflow-hidden">
+            {/* Mobile Sidebar Overlay */}
+            {isMobile && mobileSidebarOpen && (
+              <div 
+                className="fixed inset-0 bg-black/50 z-40"
+                onClick={() => setMobileSidebarOpen(false)}
+              />
+            )}
+            
+            {/* Sidebar */}
+            <aside className={`
+              ${isMobile 
+                ? `fixed left-0 top-16 bottom-0 z-50 w-72 transform transition-transform ${mobileSidebarOpen ? 'translate-x-0' : '-translate-x-full'}` 
+                : `w-64 border-r border-synth-border-subtle transition-all ${sidebarOpen ? 'translate-x-0' : '-translate-x-full absolute'}`
+              }
+              bg-synth-surface flex flex-col
+            `}>
+              <div className="p-4 border-b border-synth-border-subtle bg-synth-surface-high">
+                <div className="flex items-center justify-between mb-3">
+                  <div className="flex items-center gap-2">
+                    <span className="material-symbols-outlined text-synth-cyan">folder_open</span>
+                    <span className="font-headline text-sm font-bold tracking-wider">
+                      {currentTopic?.name?.toUpperCase() || 'THREADS'}
+                    </span>
+                  </div>
+                  <span className="text-2xs px-2 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
+                    {topicChats.length}
+                  </span>
+                </div>
+                <button 
+                  className="w-full btn-synth-primary justify-center"
+                  onClick={createNewChat}
+                >
+                  <span className="material-symbols-outlined text-sm">add</span>
+                  NEW THREAD
+                </button>
+              </div>
+              
+              <div className="flex-1 overflow-y-auto py-2">
                 {topicChats.length === 0 ? (
-                  <div className="tree-empty">
-                    <p>No conversations yet</p>
-                    <button className="btn-secondary" onClick={createNewChat}>
-                      Start new chat
+                  <div className="p-6 text-center">
+                    <p className="text-synth-text-secondary text-sm mb-4">No threads initialized</p>
+                    <button className="btn-synth-secondary" onClick={createNewChat}>
+                      Initialize
                     </button>
                   </div>
                 ) : (
@@ -684,231 +982,347 @@ function App() {
             </aside>
             
             {/* Main Chat Area */}
-            <main className="chat-main">
-              {/* Collapsed sidebar toggle - shows on both mobile and desktop when sidebar hidden */}
-              {(isMobile ? !sidebarOpen : !showSidebar) && (
+            <div className="flex-1 flex flex-col bg-synth-bg relative">
+              {/* Toggle Sidebar Button */}
+              {!isMobile && !sidebarOpen && (
                 <button 
-                  className="sidebar-toggle"
-                  onClick={() => isMobile ? setSidebarOpen(true) : setShowSidebar(true)}
-                  title="Show sidebar"
+                  className="absolute left-4 top-4 z-10 p-2 bg-synth-surface border border-synth-border-subtle text-synth-text-secondary hover:text-synth-text"
+                  onClick={() => setSidebarOpen(true)}
                 >
-                  ☰
+                  <span className="material-symbols-outlined">menu_open</span>
                 </button>
               )}
               
               {/* Chat Header */}
-              <div className="chat-header-compact">
-                <button className="chat-header-back" onClick={goBack}>
-                  ←
-                </button>
-                <div className="chat-header-info">
-                  <h2>{currentTopic?.name || 'Chat'}</h2>
-                </div>
-                <div className="chat-actions">
-                  <button className="btn-secondary" onClick={createNewChat}>
-                    New chat
+              <div className="h-14 border-b border-synth-border-subtle flex items-center px-6 bg-synth-surface/50">
+                {isMobile && (
+                  <button 
+                    className="p-2 mr-3 text-synth-text-secondary"
+                    onClick={() => setMobileSidebarOpen(true)}
+                  >
+                    <span className="material-symbols-outlined">menu</span>
                   </button>
+                )}
+                {!isMobile && sidebarOpen && (
+                  <button 
+                    className="p-2 mr-3 text-synth-text-secondary hover:text-synth-text"
+                    onClick={() => setSidebarOpen(false)}
+                  >
+                    <span className="material-symbols-outlined">menu_open</span>
+                  </button>
+                )}
+                <div className="flex-1">
+                  <h2 className="font-headline text-sm font-semibold tracking-wider">
+                    {currentChat?.title?.toUpperCase() || 'SELECT THREAD'}
+                  </h2>
+                </div>
+                <div className="flex items-center gap-3">
+                  {getStatusDot()}
+                  <span className="text-2xs text-synth-text-secondary font-mono">{getStatusText()}</span>
                 </div>
               </div>
               
               {/* Messages */}
-          {currentChat ? (
-            <>
-              <div className="chat-messages">
-                {currentChat.messages.length === 0 && (
-                  <div className="empty-state">
-                    <h3>Start a conversation</h3>
-                    <p>Type your first message below</p>
-                  </div>
-                )}
-                
-                {currentChat.messages.map((msg, index) => (
-                  <div key={msg.id} className={`message ${msg.role}`}>
-                    <div 
-                      className="message-bubble markdown-content"
-                      dangerouslySetInnerHTML={{ 
-                        __html: marked.parse(msg.text, { breaks: true, gfm: true }) as string 
-                      }}
-                    />
-                    {msg.error && <div className="message-error">{msg.error}</div>}
-                    <div className="message-actions">
-                      <button 
-                        className="btn-fork" 
-                        onClick={() => {
-                          const title = prompt('Name this branch:', `${currentChat.title} (branch ${index + 1})`);
-                          if (title) {
-                            forkChat(currentChat.id, index, title);
-                          }
-                        }}
-                        title="Fork conversation from here"
+              {currentChat ? (
+                <>
+                  <div className="flex-1 overflow-y-auto p-6 space-y-4">
+                    {currentChat.messages.length === 0 && (
+                      <div className="flex flex-col items-center justify-center h-full text-synth-text-muted">
+                        <span className="material-symbols-outlined text-4xl mb-4 opacity-30">chat_bubble_outline</span>
+                        <p className="text-sm">Initialize conversation</p>
+                        <p className="text-2xs mt-1">Type message to begin neural sync</p>
+                      </div>
+                    )}
+                    
+                    {currentChat.messages.map((msg, index) => (
+                      <div 
+                        key={msg.id} 
+                        className={`message-node ${msg.role === 'user' ? 'message-node-user' : 'message-node-assistant'}`}
                       >
-                        Fork
-                      </button>
-                    </div>
-                    <div className="message-meta">{formatTime(msg.createdAt)}</div>
+                        <div className="flex justify-between items-start mb-2">
+                          <span className="text-2xs text-synth-text-muted font-mono tracking-wider uppercase">
+                            {msg.role === 'user' ? 'USER_INPUT' : 'ASSISTANT_RESPONSE'}
+                          </span>
+                          <span className="text-2xs text-synth-text-muted font-mono">
+                            {formatTime(msg.createdAt)}
+                          </span>
+                        </div>
+                        
+                        <div 
+                          className="markdown-content text-sm"
+                          dangerouslySetInnerHTML={{ 
+                            __html: marked.parse(msg.text, { breaks: true, gfm: true }) as string 
+                          }}
+                        />
+                        
+                        {msg.error && (
+                          <div className="mt-3 p-3 bg-synth-error/20 border border-synth-error text-synth-error-text text-xs">
+                            ERROR: {msg.error}
+                          </div>
+                        )}
+                        
+                        <div className="mt-3 flex gap-2 opacity-0 hover:opacity-100 transition-opacity">
+                          <button
+                            className="text-2xs px-2 py-1 border border-synth-border text-synth-text-secondary hover:text-synth-cyan hover:border-synth-cyan transition-colors"
+                            onClick={() => {
+                              showPrompt(
+                                'INITIATE_FORK',
+                                'Enter identifier for new branch:',
+                                `${currentChat.title.slice(0, 20)}_BRANCH_${index + 1}`,
+                                (title) => {
+                                  if (title) forkChat(currentChat.id, index, title);
+                                }
+                              );
+                            }}
+                          >
+                            FORK
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {isSending && (
+                      <div className="message-node message-node-system">
+                        <div className="flex items-center gap-3">
+                          <span className="w-2 h-2 rounded-full bg-synth-cyan animate-pulse-slow" />
+                          <span className="text-sm text-synth-text-secondary">Processing neural request...</span>
+                        </div>
+                      </div>
+                    )}
+                    
+                    <div ref={messagesEndRef} />
                   </div>
-                ))}
-                
-                {isSending && (
-                  <div className="message assistant message-pending">
-                    <div className="message-bubble">Thinking...</div>
-                  </div>
-                )}
-                
-                <div ref={messagesEndRef} />
-              </div>
 
-              {/* Composer */}
-              <div className="composer">
-                <div className="composer-status">
-                  <span className={`status-indicator ${modelStatus}`} />
-                  <span>
-                    {modelStatus === 'ready' && 'Ready'}
-                    {modelStatus === 'testing' && 'Sending...'}
-                    {modelStatus === 'error' && 'Connection error'}
-                  </span>
-                </div>
-                
-                <div className="composer-input-area">
-                  <textarea
-                    value={input}
-                    onChange={e => setInput(e.target.value)}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey) {
-                        e.preventDefault();
-                        sendMessage();
-                      }
-                    }}
-                    placeholder="Type your message..."
-                    rows={1}
-                  />
-                  <button 
-                    className="btn-send"
-                    onClick={sendMessage}
-                    disabled={!input.trim() || isSending}
-                  >
-                    ↑
-                  </button>
-                </div>
-                
-                <div className="composer-footer">
-                  <small>Press Enter to send, Shift+Enter for new line</small>
-                  <div className="composer-actions">
-                    <button onClick={() => {}} disabled>Clear</button>
+                  {/* Composer */}
+                  <div className="border-t border-synth-border-subtle bg-synth-surface/50 p-4">
+                    <div className="max-w-4xl mx-auto">
+                      <div className="flex gap-3">
+                        <textarea
+                          value={input}
+                          onChange={e => setInput(e.target.value)}
+                          onKeyDown={e => {
+                            if (e.key === 'Enter' && !e.shiftKey) {
+                              e.preventDefault();
+                              sendMessage();
+                            }
+                          }}
+                          placeholder="Enter message for neural processing..."
+                          rows={1}
+                          className="flex-1 bg-synth-surface border border-synth-border text-synth-text px-4 py-3 text-sm focus:outline-none focus:border-synth-cyan resize-none placeholder-synth-text-muted"
+                        />
+                        <button 
+                          className="btn-synth-primary px-4"
+                          onClick={sendMessage}
+                          disabled={!input.trim() || isSending}
+                        >
+                          <span className="material-symbols-outlined">arrow_upward</span>
+                        </button>
+                      </div>
+                      <div className="mt-2 flex justify-between text-2xs text-synth-text-muted font-mono">
+                        <span>Press ENTER to transmit // SHIFT+ENTER for multiline</span>
+                        <span>{input.length} CHARS</span>
+                      </div>
+                    </div>
                   </div>
+                </>
+              ) : (
+                <div className="flex-1 flex flex-col items-center justify-center text-synth-text-muted">
+                  <span className="material-symbols-outlined text-4xl mb-4 opacity-30">chat</span>
+                  <p className="text-sm">No thread selected</p>
+                  <p className="text-2xs mt-1">Select from sidebar or create new</p>
                 </div>
-              </div>
-            </>
-          ) : (
-            <div className="empty-state">
-              <h3>No chat selected</h3>
-              <p>Select a conversation from the sidebar or start a new one</p>
+              )}
             </div>
-          )}
-            </main>
           </div>
-        </div>
+        )}
 
         {/* Settings View */}
-        <div className={`view settings-view ${view === 'settings' ? 'active' : ''}`}>
-          <div className="settings-header">
-            <h1>Settings</h1>
-            <p>Configure your AI model, web search, and data preferences</p>
-          </div>
-          
-          <div className="settings-grid">
-            <div className="settings-section">
-              <h2>Model Settings</h2>
+        {view === 'settings' && (
+          <div className="flex-1 overflow-auto relative">
+            <div className="absolute inset-0 opacity-[0.03] pointer-events-none bg-grid" />
             
-            <div className="form-group">
-              <label>Base URL</label>
-              <input
-                type="text"
-                value={settings.baseUrl}
-                onChange={e => updateSettings('baseUrl', e.target.value)}
-                placeholder="http://localhost:1234/v1"
-              />
-              <small>Your local model or API endpoint</small>
-            </div>
-            
-            <div className="form-group">
-              <label>Model Name</label>
-              <input
-                type="text"
-                value={settings.model}
-                onChange={e => updateSettings('model', e.target.value)}
-                placeholder="default"
-              />
-            </div>
-            
-            <div className="form-group">
-              <label>API Key (optional)</label>
-              <input
-                type="password"
-                value={settings.apiKey}
-                onChange={e => updateSettings('apiKey', e.target.value)}
-                placeholder="sk-..."
-              />
-            </div>
-            
-            <button className="btn-primary" onClick={runTest} disabled={modelStatus === 'testing'}>
-              {modelStatus === 'testing' ? 'Testing...' : 'Test Connection'}
-            </button>
-            
-            {testResult && (
-              <div className={`connection-test-result ${testResult.includes('success') ? 'success' : 'error'}`}>
-                {testResult}
+            <div className="max-w-4xl mx-auto p-12 relative z-10">
+              <div className="mb-8 border-b border-synth-border-subtle pb-6">
+                <h1 className="font-headline text-2xl font-bold tracking-tight mb-2">
+                  SYSTEM<span className="text-synth-cyan">_CONFIG</span>
+                </h1>
+                <p className="text-synth-text-secondary text-sm">
+                  Configure neural interface parameters and connection endpoints
+                </p>
               </div>
-            )}
-            </div>
-            
-            <div className="settings-section">
-              <h2>Web Search</h2>
-            <p style={{ marginBottom: 16 }}>Automatically search the web for context when you ask questions.</p>
-            
-            <div className="form-group">
-              <label className="toggle-label">
-                <input
-                  type="checkbox"
-                  checked={settings.enableWebSearch}
-                  onChange={e => updateSettings('enableWebSearch', e.target.checked)}
-                />
-                Enable auto web search
-              </label>
-            </div>
-            
-            {settings.enableWebSearch && (
-              <div className="form-group">
-                <label>Brave Search API Key</label>
-                <input
-                  type="password"
-                  value={settings.braveApiKey}
-                  onChange={e => updateSettings('braveApiKey', e.target.value)}
-                  placeholder="Get free key at brave.com/search/api"
-                />
-                <small>Free tier: 2000 queries/month. <a href="https://brave.com/search/api" target="_blank" rel="noopener">Get API key</a></small>
+              
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                {/* Model Settings */}
+                <div className="bg-synth-surface border border-synth-border-subtle p-6">
+                  <div className="flex items-center gap-2 mb-6 pb-4 border-b border-synth-border-subtle">
+                    <span className="material-symbols-outlined text-synth-cyan">memory</span>
+                    <h2 className="font-headline text-sm font-bold tracking-wider">NEURAL_INTERFACE</h2>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                        Endpoint URL
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.baseUrl}
+                        onChange={e => updateSettings('baseUrl', e.target.value)}
+                        placeholder="http://localhost:1234/v1"
+                        className="input-synth"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                        Model ID
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.model}
+                        onChange={e => updateSettings('model', e.target.value)}
+                        placeholder="default"
+                        className="input-synth"
+                      />
+                    </div>
+                    
+                    <div>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                        API Key
+                      </label>
+                      <input
+                        type="password"
+                        value={settings.apiKey}
+                        onChange={e => updateSettings('apiKey', e.target.value)}
+                        placeholder="sk-..."
+                        className="input-synth"
+                      />
+                    </div>
+                    
+                    <button 
+                      className="btn-synth-primary w-full justify-center mt-4"
+                      onClick={runTest}
+                      disabled={modelStatus === 'testing'}
+                    >
+                      {modelStatus === 'testing' ? (
+                        <><span className="animate-pulse">TESTING...</span></>
+                      ) : (
+                        <><span className="material-symbols-outlined text-sm">network_check</span> TEST CONNECTION</>
+                      )}
+                    </button>
+                    
+                    {testResult && (
+                      <div className={`mt-4 p-3 text-xs border ${testResult.includes('established') ? 'border-synth-cyan/50 bg-synth-cyan/10 text-synth-cyan' : 'border-synth-error/50 bg-synth-error/10 text-synth-error-text'}`}>
+                        {testResult.toUpperCase()}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Web Search */}
+                <div className="bg-synth-surface border border-synth-border-subtle p-6">
+                  <div className="flex items-center gap-2 mb-6 pb-4 border-b border-synth-border-subtle">
+                    <span className="material-symbols-outlined text-synth-cyan">travel_explore</span>
+                    <h2 className="font-headline text-sm font-bold tracking-wider">WEB_PROBE</h2>
+                  </div>
+                  
+                  <div className="space-y-4">
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={settings.enableWebSearch}
+                        onChange={e => updateSettings('enableWebSearch', e.target.checked)}
+                        className="w-4 h-4 accent-synth-cyan bg-synth-surface border-synth-border"
+                      />
+                      <span className="text-sm">Enable automatic web context retrieval</span>
+                    </label>
+                    
+                    {settings.enableWebSearch && (
+                      <div>
+                        <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                          Brave Search API Key
+                        </label>
+                        <input
+                          type="password"
+                          value={settings.braveApiKey}
+                          onChange={e => updateSettings('braveApiKey', e.target.value)}
+                          placeholder="Get free key at brave.com/search/api"
+                          className="input-synth"
+                        />
+                        <p className="text-2xs text-synth-text-muted mt-2">
+                          Free tier: 2000 queries/month
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+                
+                {/* Data Management */}
+                <div className="bg-synth-surface border border-synth-border-subtle p-6 md:col-span-2">
+                  <div className="flex items-center gap-2 mb-6 pb-4 border-b border-synth-border-subtle">
+                    <span className="material-symbols-outlined text-synth-cyan">storage</span>
+                    <h2 className="font-headline text-sm font-bold tracking-wider">DATA_CORE</h2>
+                  </div>
+                  
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm text-synth-text-secondary">
+                        Data stored on PocketBase server
+                      </p>
+                      <p className="text-2xs text-synth-text-muted mt-1">
+                        {chats.length} threads • {chats.reduce((acc, c) => acc + c.messages.length, 0)} messages
+                      </p>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        className="btn-synth-secondary"
+                        onClick={() => {
+                          auth.logout();
+                          setIsAuthenticated(false);
+                          setChats([]);
+                          setLastAction('Logged out');
+                        }}
+                      >
+                        <span className="material-symbols-outlined text-sm">logout</span>
+                        LOGOUT
+                      </button>
+                      <button
+                        className="btn-synth-secondary border-synth-error text-synth-error hover:bg-synth-error/20"
+                        onClick={() => {
+                          showConfirm(
+                            'PURGE_DATA_CORE',
+                            'This will permanently delete all threads and messages from the server. This action cannot be undone.',
+                            async () => {
+                              try {
+                                for (const chat of chats) {
+                                  await chatApi.deleteChat(chat.id);
+                                }
+                                setChats([]);
+                                setLastAction('All data purged from server');
+                              } catch (err: any) {
+                                setLastAction('Failed to purge: ' + err.message);
+                              }
+                            }
+                          );
+                        }}
+                      >
+                        <span className="material-symbols-outlined text-sm">delete_forever</span>
+                        PURGE
+                      </button>
+                    </div>
+                  </div>
+                </div>
               </div>
-            )}
-            </div>
-            
-            <div className="settings-section">
-              <h2>Data</h2>
-              <p>All data is stored locally in your browser.</p>
-              <button 
-                className="btn-danger"
-                onClick={() => {
-                  if (confirm('Clear all chats? This cannot be undone.')) {
-                    setChats([]);
-                    localStorage.removeItem('topic-cloud-v1');
-                  }
-                }}
-              >
-                Clear All Data
-              </button>
             </div>
           </div>
-        </div>
+        )}
       </main>
+      
+      {/* Terminal Log */}
+      <TerminalLog modelStatus={modelStatus} lastAction={lastAction} />
+      
+      {/* Modal */}
+      <Modal modal={modal} onClose={closeModal} />
     </div>
   );
 }
