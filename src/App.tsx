@@ -309,6 +309,16 @@ function App() {
   const [isMobile, setIsMobile] = useState(false);
   const [lastAction, setLastAction] = useState('');
   const [modal, setModal] = useState<ModalState>({ isOpen: false, type: 'alert', title: '', message: '' });
+  
+  // Chat selection & merge state
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedChats, setSelectedChats] = useState<Set<string>>(new Set());
+  const [mergePreview, setMergePreview] = useState<{
+    isOpen: boolean;
+    summary: string;
+    sourceChats: Chat[];
+    isGenerating: boolean;
+  }>({ isOpen: false, summary: '', sourceChats: [], isGenerating: false });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -523,22 +533,45 @@ function App() {
 
   // Tree View Component
   function TreeView({ nodes, level = 0 }: { nodes: TreeNode[]; level?: number }) {
+    const toggleChatSelection = (chatId: string, e: React.MouseEvent) => {
+      e.stopPropagation();
+      setSelectedChats(prev => {
+        const newSet = new Set(prev);
+        if (newSet.has(chatId)) {
+          newSet.delete(chatId);
+        } else {
+          newSet.add(chatId);
+        }
+        return newSet;
+      });
+    };
+
     return (
       <>
         {nodes.map(node => {
           const isExpanded = expandedChats.has(node.chat.id);
           const hasChildren = node.children.length > 0;
           const isActive = node.chat.id === activeChat;
-          
+          const isSelected = selectedChats.has(node.chat.id);
+
           return (
             <div key={node.chat.id}>
-              <div 
-                className={`tree-item ${isActive ? 'tree-item-active' : ''} ${node.chat.parentId ? 'tree-item-branch' : ''}`}
+              <div
+                className={`tree-item ${isActive ? 'tree-item-active' : ''} ${node.chat.parentId ? 'tree-item-branch' : ''} ${isSelected ? 'tree-item-selected' : ''}`}
                 style={{ paddingLeft: `${level * 16 + 16}px` }}
-                onClick={() => selectChat(node.chat.id)}
+                onClick={() => !selectionMode && selectChat(node.chat.id)}
               >
-                {hasChildren && (
-                  <button 
+                {selectionMode && (
+                  <input
+                    type="checkbox"
+                    checked={isSelected}
+                    onChange={(e) => toggleChatSelection(node.chat.id, e as any)}
+                    className="mr-2 accent-synth-cyan"
+                  />
+                )}
+
+                {hasChildren && !selectionMode && (
+                  <button
                     className="w-4 h-4 flex items-center justify-center text-synth-text-muted hover:text-synth-text"
                     onClick={(e) => { e.stopPropagation(); toggleExpanded(node.chat.id); }}
                   >
@@ -547,19 +580,19 @@ function App() {
                     </span>
                   </button>
                 )}
-                {!hasChildren && <span className="w-4" />}
-                
+                {(!hasChildren || selectionMode) && <span className="w-4" />}
+
                 {node.chat.parentId && (
                   <span className="material-symbols-outlined text-xs text-synth-cyan">alt_route</span>
                 )}
-                
+
                 <span className="flex-1 text-xs truncate">{node.chat.title}</span>
-                
+
                 <span className="text-2xs px-1.5 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
                   {node.chat.messages.length}
                 </span>
               </div>
-              
+
               {hasChildren && isExpanded && (
                 <div className="border-l border-synth-border ml-5">
                   <TreeView nodes={node.children} level={level + 1} />
@@ -570,6 +603,97 @@ function App() {
         })}
       </>
     );
+  }
+
+  // Merge functions
+  async function generateMergeSummary(sourceChats: Chat[]): Promise<string> {
+    if (sourceChats.length < 2) return '';
+
+    // Build conversation summaries for AI
+    const chatSummaries = sourceChats.map((chat, idx) => {
+      const messageTexts = chat.messages.map(m => `${m.role}: ${m.text}`).join('\n');
+      return `CHAT ${idx + 1} - ${chat.title}:\n${messageTexts}`;
+    }).join('\n\n---\n\n');
+
+    const systemPrompt = `You are a helpful assistant that summarizes and synthesizes multiple conversation threads into a coherent overview. 
+Identify the key themes, important information, and main takeaways from each conversation.
+Then provide a brief synthesis that captures the essence of all conversations combined.
+Keep it concise but informative (3-5 paragraphs max).`;
+
+    try {
+      const response = await sendToModel(settings, [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: `Please analyze and synthesize these ${sourceChats.length} conversation threads:\n\n${chatSummaries}\n\nProvide a synthesis that captures the key points from all conversations, organized by theme or topic. End with an invitation to continue the discussion.` }
+      ]);
+
+      return response;
+    } catch (error) {
+      console.error('Failed to generate merge summary:', error);
+      return `**Merged Conversations**\n\n${sourceChats.map(c => `- ${c.title} (${c.messages.length} messages)`).join('\n')}\n\n*Unable to generate AI summary. You can continue the conversation here.*`;
+    }
+  }
+
+  async function openMergePreview() {
+    if (selectedChats.size < 2) return;
+
+    const sourceChats = chats.filter(c => selectedChats.has(c.id));
+    setMergePreview({
+      isOpen: true,
+      summary: '',
+      sourceChats,
+      isGenerating: true,
+    });
+
+    // Generate summary
+    const summary = await generateMergeSummary(sourceChats);
+    setMergePreview(prev => ({ ...prev, summary, isGenerating: false }));
+  }
+
+  async function executeMerge() {
+    if (selectedChats.size < 2 || !activeTopic) return;
+
+    const sourceChats = chats.filter(c => selectedChats.has(c.id));
+    const summary = mergePreview.summary || await generateMergeSummary(sourceChats);
+
+    try {
+      // Create merged chat
+      const mergedChat = await chatApi.createChat({
+        topicId: activeTopic,
+        title: `Merged: ${sourceChats.map(c => c.title.slice(0, 20)).join(' + ')}`,
+        messages: [],
+        tags: [...new Set(sourceChats.flatMap(c => c.tags))],
+      });
+
+      // Add summary as first message
+      const welcomeMessage = await chatApi.createMessage(mergedChat.id, {
+        role: 'assistant',
+        text: summary,
+      });
+
+      // Add continuation prompt
+      const promptMessage = await chatApi.createMessage(mergedChat.id, {
+        role: 'assistant',
+        text: '---\n\n✨ **Merged conversations complete.** You can now continue chatting here. The context from all selected conversations has been synthesized above.\n\nWhat would you like to discuss next?',
+      });
+
+      // Update local state
+      setChats(prev => [{
+        ...mergedChat,
+        messages: [welcomeMessage, promptMessage],
+      }, ...prev]);
+
+      setActiveChat(mergedChat.id);
+      setSelectionMode(false);
+      setSelectedChats(new Set());
+      setMergePreview({ isOpen: false, summary: '', sourceChats: [], isGenerating: false });
+      setLastAction(`Merged ${sourceChats.length} chats into new conversation`);
+    } catch (err: any) {
+      setLastAction('Failed to merge chats: ' + err.message);
+    }
+  }
+
+  function cancelMerge() {
+    setMergePreview({ isOpen: false, summary: '', sourceChats: [], isGenerating: false });
   }
 
   // Derived state
@@ -965,13 +1089,58 @@ function App() {
                     {topicChats.length}
                   </span>
                 </div>
-                <button 
-                  className="w-full btn-synth-primary justify-center"
-                  onClick={createNewChat}
-                >
-                  <span className="material-symbols-outlined text-sm">add</span>
-                  NEW THREAD
-                </button>
+
+                {/* Selection Mode Controls */}
+                {selectionMode ? (
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs text-synth-text-secondary">
+                      <span>{selectedChats.size} selected</span>
+                      <button
+                        className="text-synth-cyan hover:underline"
+                        onClick={() => {
+                          setSelectionMode(false);
+                          setSelectedChats(new Set());
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <button
+                        className="flex-1 btn-synth-primary justify-center text-xs"
+                        disabled={selectedChats.size < 2}
+                        onClick={openMergePreview}
+                      >
+                        <span className="material-symbols-outlined text-sm">merge_type</span>
+                        MERGE
+                      </button>
+                      <button
+                        className="btn-synth-secondary text-xs"
+                        onClick={() => setSelectedChats(new Set())}
+                      >
+                        Clear
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <button
+                      className="flex-1 btn-synth-primary justify-center"
+                      onClick={createNewChat}
+                    >
+                      <span className="material-symbols-outlined text-sm">add</span>
+                      NEW
+                    </button>
+                    <button
+                      className="btn-synth-secondary"
+                      onClick={() => setSelectionMode(true)}
+                      disabled={topicChats.length < 2}
+                      title={topicChats.length < 2 ? 'Need 2+ chats to merge' : 'Select chats to merge'}
+                    >
+                      <span className="material-symbols-outlined text-sm">merge_type</span>
+                    </button>
+                  </div>
+                )}
               </div>
               
               <div className="flex-1 overflow-y-auto py-2">
@@ -1330,6 +1499,98 @@ function App() {
       
       {/* Modal */}
       <Modal modal={modal} onClose={closeModal} />
+
+      {/* Merge Preview Modal */}
+      {mergePreview.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="relative bg-synth-surface border border-synth-border w-full max-w-2xl max-h-[80vh] flex flex-col shadow-2xl">
+            {/* Traveling border glow effect */}
+            <div className="modal-border-light top" />
+            <div className="modal-border-light right" />
+            <div className="modal-border-light bottom" />
+            <div className="modal-border-light left" />
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-synth-border-subtle bg-synth-surface-high">
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined text-synth-cyan">merge_type</span>
+                <h3 className="font-headline text-sm font-bold tracking-wider uppercase">
+                  MERGE_PREVIEW
+                </h3>
+              </div>
+              <button
+                className="text-synth-text-muted hover:text-synth-text"
+                onClick={cancelMerge}
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {/* Source chats */}
+              <div className="mb-6">
+                <h4 className="text-2xs text-synth-text-secondary uppercase tracking-wider mb-3">
+                  Source Conversations ({mergePreview.sourceChats.length})
+                </h4>
+                <div className="space-y-2">
+                  {mergePreview.sourceChats.map(chat => (
+                    <div key={chat.id} className="flex items-center gap-3 p-3 bg-synth-surface-high border border-synth-border-subtle">
+                      <span className="material-symbols-outlined text-synth-cyan text-sm">chat</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm truncate">{chat.title}</p>
+                        <p className="text-2xs text-synth-text-muted">{chat.messages.length} messages</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* AI Summary */}
+              <div>
+                <h4 className="text-2xs text-synth-text-secondary uppercase tracking-wider mb-3">
+                  AI Synthesis
+                </h4>
+                {mergePreview.isGenerating ? (
+                  <div className="p-6 text-center border border-synth-border-subtle bg-synth-surface-high">
+                    <div className="inline-block w-6 h-6 border-2 border-synth-cyan border-t-transparent rounded-full animate-spin mb-3" />
+                    <p className="text-synth-text-secondary text-sm">Analyzing conversations...</p>
+                    <p className="text-2xs text-synth-text-muted mt-1">Extracting key themes and insights</p>
+                  </div>
+                ) : (
+                  <div className="p-4 border border-synth-border-subtle bg-synth-surface-high">
+                    <div
+                      className="markdown-content text-sm text-synth-text-secondary"
+                      dangerouslySetInnerHTML={{
+                        __html: marked.parse(mergePreview.summary, { breaks: true }) as string
+                      }}
+                    />
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Footer */}
+            <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-synth-border-subtle bg-synth-surface-high">
+              <button
+                className="btn-synth-secondary"
+                onClick={cancelMerge}
+                disabled={mergePreview.isGenerating}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn-synth-primary"
+                onClick={executeMerge}
+                disabled={mergePreview.isGenerating}
+              >
+                <span className="material-symbols-outlined text-sm">merge_type</span>
+                Create Merged Chat
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

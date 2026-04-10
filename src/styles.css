@@ -350,7 +350,11 @@
   .tree-item-branch {
     @apply border-l-synth-cyan/30;
   }
-  
+
+  .tree-item-selected {
+    @apply bg-synth-cyan/10 border-l-synth-cyan;
+  }
+
   /* Scrollbar Styling */
   ::-webkit-scrollbar {
     width: 6px;
