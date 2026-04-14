@@ -5,7 +5,7 @@ import type { TopicId, View, ModelStatus, ModalState, Topic, Message, Chat, Sett
 import { auth, chatApi } from './pocketbase';
 
 // Constants
-const TOPICS: Topic[] = [
+const DEFAULT_TOPICS: Topic[] = [
   { id: 'golf', name: 'Golf', description: 'Swing thoughts and practice notes', icon: 'sports_golf' },
   { id: 'football', name: 'Football', description: 'Matches, tactics, and analysis', icon: 'sports_soccer' },
   { id: 'gaming', name: 'Gaming', description: 'What to play next', icon: 'sports_esports' },
@@ -298,6 +298,7 @@ function App() {
   const [activeTopic, setActiveTopic] = useState<TopicId | null>(null);
   const [activeChat, setActiveChat] = useState<string | null>(null);
   const [chats, setChats] = useState<Chat[]>([]);
+  const [topics, setTopics] = useState<Topic[]>(DEFAULT_TOPICS);
   const [settings, setSettings] = useState<Settings>(DEFAULT_SETTINGS);
   const [input, setInput] = useState('');
   const [isSending, setIsSending] = useState(false);
@@ -329,6 +330,14 @@ function App() {
     dateTo: '',
     tags: [] as string[],
   });
+
+  // Topic management state
+  const [topicModal, setTopicModal] = useState<{
+    isOpen: boolean;
+    mode: 'add' | 'move' | 'remove';
+    targetTopic?: Topic;
+    chatToMove?: Chat;
+  }>({ isOpen: false, mode: 'add' });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -706,8 +715,59 @@ Keep it concise but informative (3-5 paragraphs max).`;
     setMergePreview({ isOpen: false, summary: '', sourceChats: [], isGenerating: false });
   }
 
+  // Topic management functions
+  function addTopic(name: string, description: string, icon: string) {
+    const id = name.toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '') as TopicId;
+    
+    // Check if topic already exists
+    if (topics.some(t => t.id === id)) {
+      setLastAction('Topic already exists');
+      return false;
+    }
+
+    const newTopic: Topic = { id, name, description, icon };
+    setTopics(prev => [...prev, newTopic]);
+    setLastAction(`Added topic: ${name}`);
+    return true;
+  }
+
+  function removeTopic(topicId: TopicId, deleteChats: boolean = false, moveToTopicId?: TopicId) {
+    const topic = topics.find(t => t.id === topicId);
+    if (!topic) return;
+
+    const chatsInTopic = chats.filter(c => c.topicId === topicId);
+
+    if (deleteChats) {
+      // Delete all chats in this topic
+      setChats(prev => prev.filter(c => c.topicId !== topicId));
+      setTopics(prev => prev.filter(t => t.id !== topicId));
+      if (activeTopic === topicId) {
+        setActiveTopic(null);
+        setActiveChat(null);
+      }
+      setLastAction(`Deleted topic "${topic.name}" and ${chatsInTopic.length} chats`);
+    } else if (moveToTopicId) {
+      // Move chats to another topic
+      setChats(prev => prev.map(c => 
+        c.topicId === topicId ? { ...c, topicId: moveToTopicId as TopicId } : c
+      ));
+      setTopics(prev => prev.filter(t => t.id !== topicId));
+      setLastAction(`Moved ${chatsInTopic.length} chats to another topic and deleted "${topic.name}"`);
+    }
+  }
+
+  function moveChatToTopic(chatId: string, targetTopicId: TopicId) {
+    setChats(prev => prev.map(c => 
+      c.id === chatId ? { ...c, topicId: targetTopicId } : c
+    ));
+    const chat = chats.find(c => c.id === chatId);
+    const targetTopic = topics.find(t => t.id === targetTopicId);
+    setLastAction(`Moved "${chat?.title}" to ${targetTopic?.name}`);
+    setTopicModal({ isOpen: false, mode: 'add' });
+  }
+
   // Derived state
-  const currentTopic = useMemo(() => TOPICS.find(t => t.id === activeTopic), [activeTopic]);
+  const currentTopic = useMemo(() => topics.find(t => t.id === activeTopic), [activeTopic, topics]);
   const currentChat = useMemo(() => chats.find(c => c.id === activeChat), [chats, activeChat]);
   const topicChats = useMemo(() =>
     chats.filter(c => c.topicId === activeTopic).sort((a, b) => 
@@ -1087,27 +1147,70 @@ Keep it concise but informative (3-5 paragraphs max).`;
               </div>
               
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-4xl">
-                {TOPICS.map(topic => {
+                {topics.map(topic => {
                   const count = chats.filter(c => c.topicId === topic.id).length;
+                  const isDefaultTopic = ['golf', 'football', 'gaming', 'work', 'ideas', 'learning'].includes(topic.id);
                   return (
-                    <button 
-                      key={topic.id} 
-                      className="topic-card text-left group"
-                      onClick={() => startChat(topic.id)}
-                    >
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="material-symbols-outlined text-synth-cyan group-hover:glow-cyan transition-all">
-                          {topic.icon}
-                        </span>
-                        <h3 className="font-headline text-sm font-semibold tracking-wider">{topic.name.toUpperCase()}</h3>
-                      </div>
-                      <p className="text-synth-text-secondary text-xs mb-3">{topic.description}</p>
-                      <div className="text-2xs text-synth-text-muted font-mono">
-                        {count} THREAD{count !== 1 ? 'S' : ''}
-                      </div>
-                    </button>
+                    <div key={topic.id} className="topic-card text-left group relative">
+                      <button 
+                        className="w-full"
+                        onClick={() => startChat(topic.id)}
+                      >
+                        <div className="flex items-center gap-3 mb-3">
+                          <span className="material-symbols-outlined text-synth-cyan group-hover:glow-cyan transition-all">
+                            {topic.icon}
+                          </span>
+                          <h3 className="font-headline text-sm font-semibold tracking-wider">{topic.name.toUpperCase()}</h3>
+                        </div>
+                        <p className="text-synth-text-secondary text-xs mb-3">{topic.description}</p>
+                        <div className="text-2xs text-synth-text-muted font-mono">
+                          {count} THREAD{count !== 1 ? 'S' : ''}
+                        </div>
+                      </button>
+                      {!isDefaultTopic && (
+                        <button
+                          className="absolute top-2 right-2 p-1.5 rounded bg-synth-surface-high/80 text-synth-text-muted hover:text-synth-error hover:bg-synth-error/20 opacity-0 group-hover:opacity-100 transition-all"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const chatsInTopic = chats.filter(c => c.topicId === topic.id);
+                            if (chatsInTopic.length > 0) {
+                              // Show confirmation modal for non-empty topic
+                              showConfirm(
+                                'DELETE_TOPIC?',
+                                `"${topic.name}" has ${chatsInTopic.length} thread${chatsInTopic.length !== 1 ? 's' : ''}. Delete all threads or move them to another topic?`,
+                                () => {
+                                  // Default to delete all
+                                  removeTopic(topic.id, true);
+                                },
+                                () => {
+                                  // Show move dialog
+                                  setTopicModal({ isOpen: true, mode: 'move', targetTopic: topic });
+                                }
+                              );
+                            } else {
+                              removeTopic(topic.id, true);
+                            }
+                          }}
+                          title="Delete topic"
+                        >
+                          <span className="material-symbols-outlined text-sm">delete</span>
+                        </button>
+                      )}
+                    </div>
                   );
                 })}
+                {/* Add Topic Card */}
+                <button 
+                  className="topic-card text-left group border-dashed border-2 border-synth-border-subtle hover:border-synth-cyan"
+                  onClick={() => setTopicModal({ isOpen: true, mode: 'add' })}
+                >
+                  <div className="flex items-center justify-center h-full min-h-[100px]">
+                    <div className="text-center">
+                      <span className="material-symbols-outlined text-synth-cyan text-2xl mb-2 block">add</span>
+                      <p className="text-synth-text-secondary text-xs">ADD_TOPIC</p>
+                    </div>
+                  </div>
+                </button>
               </div>
             </div>
           </div>
@@ -1325,7 +1428,7 @@ Keep it concise but informative (3-5 paragraphs max).`;
                         >
                           <div className="flex items-center gap-2 mb-1">
                             <span className="text-2xs px-1.5 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
-                              {TOPICS.find(t => t.id === chat.topicId)?.name}
+                              {topics.find(t => t.id === chat.topicId)?.name}
                             </span>
                             <span className="text-2xs text-synth-text-muted">
                               {formatRelative(chat.updatedAt)}
@@ -1422,6 +1525,18 @@ Keep it concise but informative (3-5 paragraphs max).`;
                 <div className="flex items-center gap-3">
                   {getStatusDot()}
                   <span className="text-2xs text-synth-text-secondary font-mono">{getStatusText()}</span>
+                  {currentChat && (
+                    <button
+                      className="flex items-center gap-1 px-2 py-1 text-2xs text-synth-text-secondary hover:text-synth-cyan border border-synth-border-subtle hover:border-synth-cyan rounded transition-colors"
+                      onClick={() => {
+                        setTopicModal({ isOpen: true, mode: 'move', chatToMove: currentChat });
+                      }}
+                      title="Move to another topic"
+                    >
+                      <span className="material-symbols-outlined text-sm">drive_file_move</span>
+                      MOVE
+                    </button>
+                  )}
                 </div>
               </div>
               
@@ -1814,6 +1929,158 @@ Keep it concise but informative (3-5 paragraphs max).`;
                 <span className="material-symbols-outlined text-sm">merge_type</span>
                 Create Merged Chat
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Topic Management Modal */}
+      {topicModal.isOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+          <div className="relative bg-synth-surface border border-synth-border w-full max-w-md flex flex-col shadow-2xl">
+            {/* Traveling border glow effect */}
+            <div className="modal-border-light top" />
+            <div className="modal-border-light right" />
+            <div className="modal-border-light bottom" />
+            <div className="modal-border-light left" />
+
+            {/* Header */}
+            <div className="flex items-center justify-between px-6 py-4 border-b border-synth-border-subtle bg-synth-surface-high">
+              <div className="flex items-center gap-3">
+                <span className="material-symbols-outlined text-synth-cyan">
+                  {topicModal.mode === 'add' ? 'add_circle' : 'drive_file_move'}
+                </span>
+                <h3 className="font-headline text-sm font-bold tracking-wider uppercase">
+                  {topicModal.mode === 'add' ? 'ADD_TOPIC' : 'MOVE_THREAD'}
+                </h3>
+              </div>
+              <button
+                className="text-synth-text-muted hover:text-synth-text"
+                onClick={() => setTopicModal({ isOpen: false, mode: 'add' })}
+              >
+                <span className="material-symbols-outlined">close</span>
+              </button>
+            </div>
+
+            {/* Content */}
+            <div className="flex-1 overflow-y-auto p-6">
+              {topicModal.mode === 'add' ? (
+                // Add Topic Form
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const form = e.target as HTMLFormElement;
+                    const name = (form.elements.namedItem('name') as HTMLInputElement).value.trim();
+                    const description = (form.elements.namedItem('description') as HTMLInputElement).value.trim();
+                    const icon = (form.elements.namedItem('icon') as HTMLInputElement).value.trim() || 'label';
+                    if (name) {
+                      if (addTopic(name, description, icon)) {
+                        setTopicModal({ isOpen: false, mode: 'add' });
+                      }
+                    }
+                  }}
+                  className="space-y-4"
+                >
+                  <div>
+                    <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                      Topic Name *
+                    </label>
+                    <input
+                      type="text"
+                      name="name"
+                      required
+                      placeholder="e.g., Photography"
+                      className="w-full bg-synth-surface border border-synth-border-subtle rounded px-3 py-2 text-sm text-synth-text placeholder-synth-text-muted focus:outline-none focus:border-synth-cyan"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                      Description
+                    </label>
+                    <input
+                      type="text"
+                      name="description"
+                      placeholder="What is this topic about?"
+                      className="w-full bg-synth-surface border border-synth-border-subtle rounded px-3 py-2 text-sm text-synth-text placeholder-synth-text-muted focus:outline-none focus:border-synth-cyan"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                      Icon (Material Symbol name)
+                    </label>
+                    <input
+                      type="text"
+                      name="icon"
+                      placeholder="label"
+                      defaultValue="label"
+                      className="w-full bg-synth-surface border border-synth-border-subtle rounded px-3 py-2 text-sm text-synth-text placeholder-synth-text-muted focus:outline-none focus:border-synth-cyan"
+                    />
+                    <p className="text-2xs text-synth-text-muted mt-1">
+                      Use Material Symbols names: photo, camera, music, book, etc.
+                    </p>
+                  </div>
+                  <div className="flex gap-3 pt-4">
+                    <button
+                      type="button"
+                      className="flex-1 btn-synth-secondary"
+                      onClick={() => setTopicModal({ isOpen: false, mode: 'add' })}
+                    >
+                      Cancel
+                    </button>
+                    <button type="submit" className="flex-1 btn-synth-primary">
+                      Add Topic
+                    </button>
+                  </div>
+                </form>
+              ) : (
+                // Move to Topic Selector
+                <div className="space-y-4">
+                  {topicModal.targetTopic && (
+                    <p className="text-sm text-synth-text-secondary">
+                      Moving threads from "{topicModal.targetTopic.name}" to:
+                    </p>
+                  )}
+                  <div className="space-y-2">
+                    {topics
+                      .filter(t => t.id !== topicModal.targetTopic?.id)
+                      .map(topic => {
+                        const count = chats.filter(c => c.topicId === topic.id).length;
+                        return (
+                          <button
+                            key={topic.id}
+                            className="w-full p-4 bg-synth-surface-high border border-synth-border-subtle rounded hover:border-synth-cyan transition-colors text-left"
+                            onClick={() => {
+                              if (topicModal.targetTopic) {
+                                // Moving from delete confirmation
+                                const chatsInTopic = chats.filter(c => c.topicId === topicModal.targetTopic!.id);
+                                // Move all chats to selected topic
+                                chatsInTopic.forEach(chat => moveChatToTopic(chat.id, topic.id));
+                                // Then delete the old topic
+                                removeTopic(topicModal.targetTopic!.id, false);
+                              } else if (activeChat) {
+                                // Moving single chat
+                                moveChatToTopic(activeChat, topic.id);
+                              }
+                              setTopicModal({ isOpen: false, mode: 'add' });
+                            }}
+                          >
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-3">
+                                <span className="material-symbols-outlined text-synth-cyan">
+                                  {topic.icon}
+                                </span>
+                                <span className="text-sm font-medium">{topic.name}</span>
+                              </div>
+                              <span className="text-2xs text-synth-text-muted">
+                                {count} thread{count !== 1 ? 's' : ''}
+                              </span>
+                            </div>
+                          </button>
+                        );
+                      })}
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </div>
