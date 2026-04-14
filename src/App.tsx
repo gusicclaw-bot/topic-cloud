@@ -320,6 +320,16 @@ function App() {
     isGenerating: boolean;
   }>({ isOpen: false, summary: '', sourceChats: [], isGenerating: false });
 
+  // Search state
+  const [searchMode, setSearchMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<Chat[] | null>(null);
+  const [searchFilters, setSearchFilters] = useState({
+    dateFrom: '',
+    dateTo: '',
+    tags: [] as string[],
+  });
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Modal helpers
@@ -705,6 +715,51 @@ Keep it concise but informative (3-5 paragraphs max).`;
     ),
     [chats, activeTopic]
   );
+
+  // Search logic
+  const allTags = useMemo(() => {
+    const tagSet = new Set<string>();
+    chats.forEach(chat => chat.tags?.forEach(tag => tagSet.add(tag)));
+    return Array.from(tagSet).sort();
+  }, [chats]);
+
+  const filteredChats = useMemo(() => {
+    if (!searchQuery.trim() && !searchFilters.dateFrom && !searchFilters.dateTo && searchFilters.tags.length === 0) {
+      return null; // No search active
+    }
+
+    const query = searchQuery.toLowerCase().trim();
+    return chats.filter(chat => {
+      // Text search
+      if (query) {
+        const titleMatch = chat.title.toLowerCase().includes(query);
+        const messageMatch = chat.messages.some(m => 
+          m.text.toLowerCase().includes(query)
+        );
+        const tagMatch = chat.tags?.some(tag => tag.toLowerCase().includes(query));
+        if (!titleMatch && !messageMatch && !tagMatch) return false;
+      }
+
+      // Date filters
+      if (searchFilters.dateFrom) {
+        const fromDate = new Date(searchFilters.dateFrom);
+        if (new Date(chat.createdAt) < fromDate) return false;
+      }
+      if (searchFilters.dateTo) {
+        const toDate = new Date(searchFilters.dateTo);
+        toDate.setHours(23, 59, 59, 999); // End of day
+        if (new Date(chat.createdAt) > toDate) return false;
+      }
+
+      // Tag filters
+      if (searchFilters.tags.length > 0) {
+        const hasAllTags = searchFilters.tags.every(tag => chat.tags?.includes(tag));
+        if (!hasAllTags) return false;
+      }
+
+      return true;
+    }).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [chats, searchQuery, searchFilters]);
 
   // Effects
   // Load chats from server when authenticated
@@ -1132,6 +1187,20 @@ Keep it concise but informative (3-5 paragraphs max).`;
                       NEW
                     </button>
                     <button
+                      className={`btn-synth-secondary ${searchMode ? 'bg-synth-cyan/20 border-synth-cyan' : ''}`}
+                      onClick={() => {
+                        setSearchMode(!searchMode);
+                        if (searchMode) {
+                          setSearchQuery('');
+                          setSearchResults(null);
+                          setSearchFilters({ dateFrom: '', dateTo: '', tags: [] });
+                        }
+                      }}
+                      title="Search chats"
+                    >
+                      <span className="material-symbols-outlined text-sm">search</span>
+                    </button>
+                    <button
                       className="btn-synth-secondary"
                       onClick={() => setSelectionMode(true)}
                       disabled={topicChats.length < 2}
@@ -1141,10 +1210,168 @@ Keep it concise but informative (3-5 paragraphs max).`;
                     </button>
                   </div>
                 )}
+
+                {/* Search Mode UI */}
+                {searchMode && (
+                  <div className="mt-3 space-y-2">
+                    <div className="relative">
+                      <input
+                        type="text"
+                        value={searchQuery}
+                        onChange={(e) => setSearchQuery(e.target.value)}
+                        placeholder="Search chats..."
+                        className="w-full bg-synth-surface border border-synth-border-subtle rounded px-3 py-2 text-sm text-synth-text placeholder-synth-text-muted focus:outline-none focus:border-synth-cyan"
+                        autoFocus
+                      />
+                      {searchQuery && (
+                        <button
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-synth-text-muted hover:text-synth-text"
+                          onClick={() => setSearchQuery('')}
+                        >
+                          <span className="material-symbols-outlined text-sm">close</span>
+                        </button>
+                      )}
+                    </div>
+
+                    {/* Quick Filters */}
+                    <div className="flex gap-2">
+                      <select
+                        value={searchFilters.dateFrom}
+                        onChange={(e) => setSearchFilters(f => ({ ...f, dateFrom: e.target.value }))}
+                        className="flex-1 bg-synth-surface border border-synth-border-subtle rounded px-2 py-1 text-xs text-synth-text focus:outline-none focus:border-synth-cyan"
+                      >
+                        <option value="">From date</option>
+                        <option value={new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}>Last 7 days</option>
+                        <option value={new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}>Last 30 days</option>
+                        <option value={new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString().split('T')[0]}>Last 90 days</option>
+                      </select>
+                      <select
+                        value={searchFilters.dateTo}
+                        onChange={(e) => setSearchFilters(f => ({ ...f, dateTo: e.target.value }))}
+                        className="flex-1 bg-synth-surface border border-synth-border-subtle rounded px-2 py-1 text-xs text-synth-text focus:outline-none focus:border-synth-cyan"
+                      >
+                        <option value="">To date</option>
+                        <option value={new Date().toISOString().split('T')[0]}>Today</option>
+                      </select>
+                    </div>
+
+                    {/* Tag filters */}
+                    {allTags.length > 0 && (
+                      <div className="flex flex-wrap gap-1">
+                        {allTags.slice(0, 8).map(tag => (
+                          <button
+                            key={tag}
+                            onClick={() => {
+                              setSearchFilters(f => ({
+                                ...f,
+                                tags: f.tags.includes(tag)
+                                  ? f.tags.filter(t => t !== tag)
+                                  : [...f.tags, tag]
+                              }));
+                            }}
+                            className={`text-2xs px-2 py-0.5 rounded transition-colors ${
+                              searchFilters.tags.includes(tag)
+                                ? 'bg-synth-cyan text-synth-bg'
+                                : 'bg-synth-surface-high text-synth-text-muted hover:text-synth-text'
+                            }`}
+                          >
+                            {tag}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Results count */}
+                    {searchQuery && filteredChats !== null && (
+                      <div className="text-2xs text-synth-text-muted">
+                        {filteredChats.length} {filteredChats.length === 1 ? 'result' : 'results'}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
               
               <div className="flex-1 overflow-y-auto py-2">
-                {topicChats.length === 0 ? (
+                {searchMode ? (
+                  // Search mode results
+                  filteredChats === null || (!searchQuery && searchFilters.tags.length === 0 && !searchFilters.dateFrom && !searchFilters.dateTo) ? (
+                    <div className="p-6 text-center">
+                      <span className="material-symbols-outlined text-2xl text-synth-text-muted mb-2">search</span>
+                      <p className="text-synth-text-secondary text-sm">Type to search across all chats</p>
+                      <p className="text-synth-text-muted text-xs mt-1">Search titles, messages, and tags</p>
+                    </div>
+                  ) : filteredChats.length === 0 ? (
+                    <div className="p-6 text-center">
+                      <span className="material-symbols-outlined text-2xl text-synth-text-muted mb-2">search_off</span>
+                      <p className="text-synth-text-secondary text-sm mb-1">No results found</p>
+                      <p className="text-synth-text-muted text-xs">Try different keywords or filters</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-1 px-2">
+                      {filteredChats.map(chat => (
+                        <div
+                          key={chat.id}
+                          className={`p-3 rounded cursor-pointer transition-colors ${
+                            chat.id === activeChat
+                              ? 'bg-synth-surface-high border-l-2 border-synth-cyan'
+                              : 'hover:bg-synth-surface-high border-l-2 border-transparent'
+                          }`}
+                          onClick={() => {
+                            setActiveChat(chat.id);
+                            setActiveTopic(chat.topicId as TopicId);
+                            setSearchMode(false);
+                            setSearchQuery('');
+                          }}
+                        >
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="text-2xs px-1.5 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
+                              {TOPICS.find(t => t.id === chat.topicId)?.name}
+                            </span>
+                            <span className="text-2xs text-synth-text-muted">
+                              {formatRelative(chat.updatedAt)}
+                            </span>
+                          </div>
+                          <p className="text-sm font-medium truncate mb-1">{chat.title}</p>
+                          <p className="text-xs text-synth-text-muted truncate">
+                            {chat.messages.length} messages
+                          </p>
+                          {chat.tags && chat.tags.length > 0 && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {chat.tags.slice(0, 3).map(tag => (
+                                <span key={tag} className="text-2xs px-1 py-0.5 bg-synth-cyan/10 text-synth-cyan rounded">
+                                  {tag}
+                                </span>
+                              ))}
+                              {chat.tags.length > 3 && (
+                                <span className="text-2xs text-synth-text-muted">+{chat.tags.length - 3}</span>
+                              )}
+                            </div>
+                          )}
+                          {/* Show matching snippet */}
+                          {searchQuery && (() => {
+                            const match = chat.messages.find(m => 
+                              m.text.toLowerCase().includes(searchQuery.toLowerCase())
+                            );
+                            if (match) {
+                              const idx = match.text.toLowerCase().indexOf(searchQuery.toLowerCase());
+                              const start = Math.max(0, idx - 30);
+                              const end = Math.min(match.text.length, idx + searchQuery.length + 30);
+                              const snippet = (start > 0 ? '...' : '') + 
+                                match.text.slice(start, end) + 
+                                (end < match.text.length ? '...' : '');
+                              return (
+                                <p className="text-2xs text-synth-text-secondary mt-1 italic">
+                                  "...{snippet}..."
+                                </p>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </div>
+                      ))}
+                    </div>
+                  )
+                ) : topicChats.length === 0 ? (
                   <div className="p-6 text-center">
                     <p className="text-synth-text-secondary text-sm mb-4">No threads initialized</p>
                     <button className="btn-synth-secondary" onClick={createNewChat}>
