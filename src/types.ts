@@ -1,6 +1,6 @@
 // Types
 export type TopicId = 'explore' | 'learn' | 'create' | 'refine' | 'review' | 'archive';
-export type View = 'landing' | 'chat' | 'settings';
+export type View = 'landing' | 'chat' | 'settings' | 'interview';
 export type ModelStatus = 'ready' | 'testing' | 'error' | 'offline';
 export type ModalType = 'confirm' | 'prompt' | 'alert';
 
@@ -59,4 +59,36 @@ export interface TreeNode {
   chat: Chat;
   children: TreeNode[];
   depth: number;
+}
+
+// Interview Mode Types
+export type InterviewSpeaker = 'host' | 'expert' | 'user';
+
+export interface InterviewMessage {
+  id: string;
+  speaker: InterviewSpeaker;
+  text: string;
+  timestamp: string;
+}
+
+export interface AudienceQuestion {
+  id: string;
+  text: string;
+  status: 'queued' | 'answered';
+  timestamp: string;
+}
+
+export interface InterviewState {
+  isActive: boolean;
+  topic: string;
+  hostModel: string;
+  expertModel: string;
+  messages: InterviewMessage[];
+  audienceQuestions: AudienceQuestion[];
+  handRaised: boolean;
+  userQuestion: string;
+  userGuidance: string;
+  isRunning: boolean;
+  turnCount: number;
+  lastSpeaker: InterviewSpeaker;
 }

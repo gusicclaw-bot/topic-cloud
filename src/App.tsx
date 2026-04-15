@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import './styles.css';
-import type { TopicId, View, ModelStatus, ModalState, Topic, Message, Chat, Settings } from './types';
+import type { TopicId, View, ModelStatus, ModalState, Topic, Message, Chat, Settings, InterviewMessage, InterviewSpeaker, AudienceQuestion } from './types';
 import { auth, chatApi } from './pocketbase';
 
 // Constants
@@ -352,6 +352,22 @@ function App() {
 
   // Quote selection state
   const [quoteSelection, setQuoteSelection] = useState<{ text: string; x: number; y: number } | null>(null);
+
+  // Interview state
+  const [interview, setInterview] = useState({
+    isActive: false,
+    topic: '',
+    hostModel: 'qwen3.5-9b',
+    expertModel: 'qwen3.5-35b-a3b',
+    messages: [] as InterviewMessage[],
+    audienceQuestions: [] as AudienceQuestion[],
+    handRaised: false,
+    userQuestion: '',
+    userGuidance: '',
+    isRunning: false,
+    turnCount: 0,
+    lastSpeaker: 'host' as InterviewSpeaker,
+  });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -871,6 +887,148 @@ Keep it concise but informative (3-5 paragraphs max).`;
     window.getSelection()?.removeAllRanges();
   }
 
+  // Interview Mode Functions
+  const HOST_SYSTEM = `You are a thoughtful, well-structured interview host. You guide conversations with intelligence and curiosity. You ask insightful follow-up questions. You periodically check if the audience has questions with phrases like "Let's see if anyone in the audience has questions" or "Any questions from our listeners?". You keep the conversation flowing naturally between you and the expert. Be concise but engaging.`;
+
+  const EXPERT_SYSTEM = `You are a deeply knowledgeable expert who explains complex topics with clarity and depth. You provide thorough, well-reasoned explanations. When the host asks questions, you dive deep with substantive answers. You use analogies and examples to make concepts clear. Be generous with details while remaining accessible.`;
+
+  function createInterviewMessage(speaker: InterviewSpeaker, text: string): InterviewMessage {
+    return {
+      id: createId('imsg'),
+      speaker,
+      text,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  async function startInterview(topic: string) {
+    setInterview(prev => ({
+      ...prev,
+      isActive: true,
+      topic,
+      messages: [],
+      audienceQuestions: [],
+      handRaised: false,
+      userQuestion: '',
+      userGuidance: '',
+      isRunning: true,
+      turnCount: 0,
+      lastSpeaker: 'host' as InterviewSpeaker,
+    }));
+    setView('interview');
+    // Run first turn
+    await runInterviewTurn();
+  }
+
+  function stopInterview() {
+    setInterview(prev => ({
+      ...prev,
+      isActive: false,
+      isRunning: false,
+    }));
+    setView('landing');
+  }
+
+  async function runInterviewTurn() {
+    const currentInterview = interview;
+    if (!currentInterview.isActive || !currentInterview.isRunning) return;
+
+    const isHostTurn = currentInterview.turnCount % 2 === 0;
+    const speaker = isHostTurn ? 'host' : 'expert';
+    const systemPrompt = isHostTurn ? HOST_SYSTEM : EXPERT_SYSTEM;
+
+    // Build messages for API
+    const apiMessages: { role: string; content: string }[] = [
+      { role: 'system' as const, content: systemPrompt },
+    ];
+
+    // Add conversation history
+    currentInterview.messages.forEach(msg => {
+      const role = msg.speaker === 'user' ? 'user' : (msg.speaker === 'host' ? 'assistant' : 'user');
+      apiMessages.push({ role, content: msg.text });
+    });
+
+    // Add user guidance if present
+    let guidanceNote = '';
+    if (currentInterview.userGuidance.trim()) {
+      guidanceNote = `\n\n[Moderator note: ${currentInterview.userGuidance}]`;
+    }
+
+    // Add queued audience question if any
+    const queuedQuestion = currentInterview.audienceQuestions.find(q => q.status === 'queued');
+    if (queuedQuestion && !isHostTurn) {
+      apiMessages.push({ 
+        role: 'user' as const, 
+        content: `Audience question: ${queuedQuestion.text}${guidanceNote}` 
+      });
+    } else if (isHostTurn && currentInterview.messages.length === 0) {
+      apiMessages.push({ 
+        role: 'user' as const, 
+        content: `Today we're exploring: ${currentInterview.topic}. Please introduce the topic and bring in our expert.${guidanceNote}` 
+      });
+    } else if (isHostTurn) {
+      const lastExpertMsg = currentInterview.messages.filter(m => m.speaker === 'expert').pop();
+      if (lastExpertMsg) {
+        const shouldAskAudience = currentInterview.turnCount > 0 && currentInterview.turnCount % 3 === 0;
+        let hostPrompt = shouldAskAudience 
+          ? `The expert just said: "${lastExpertMsg.text.slice(0, 200)}..."\n\nLet's see if anyone in the audience has questions? Feel free to raise your hand!`
+          : `The expert just said: "${lastExpertMsg.text.slice(0, 200)}..."\n\nAsk a thoughtful follow-up question.${guidanceNote}`;
+        apiMessages.push({ role: 'user' as const, content: hostPrompt });
+      }
+    } else if (guidanceNote) {
+      apiMessages.push({ role: 'user' as const, content: guidanceNote });
+    }
+
+    try {
+      const response = await sendToModel(settings, apiMessages);
+      const newMessage = createInterviewMessage(speaker, response);
+
+      let updatedQuestions = currentInterview.audienceQuestions;
+      if (queuedQuestion && !isHostTurn) {
+        updatedQuestions = currentInterview.audienceQuestions.map(q => 
+          q.id === queuedQuestion.id ? { ...q, status: 'answered' as const } : q
+        );
+      }
+
+      setInterview(prev => ({
+        ...prev,
+        messages: [...prev.messages, newMessage],
+        audienceQuestions: updatedQuestions,
+        turnCount: prev.turnCount + 1,
+        lastSpeaker: speaker,
+        handRaised: queuedQuestion ? false : prev.handRaised,
+      }));
+
+      // If still running, schedule next turn after a delay
+      if (currentInterview.isRunning && !queuedQuestion) {
+        setTimeout(() => {
+          if (interview.isRunning) runInterviewTurn();
+        }, 1500);
+      }
+    } catch (error) {
+      console.error('Interview turn error:', error);
+    }
+  }
+
+  function raiseHand() {
+    if (!interview.handRaised && interview.userQuestion.trim()) {
+      setInterview(prev => ({
+        ...prev,
+        handRaised: true,
+        audienceQuestions: [
+          ...prev.audienceQuestions,
+          {
+            id: createId('q'),
+            text: prev.userQuestion,
+            status: 'queued' as const,
+            timestamp: new Date().toISOString(),
+          }
+        ],
+        userQuestion: '',
+      }));
+    }
+  }
+
   // Derived state
   const currentTopic = useMemo(() => topics.find(t => t.id === activeTopic), [activeTopic, topics]);
   const currentChat = useMemo(() => chats.find(c => c.id === activeChat), [chats, activeChat]);
@@ -1323,6 +1481,33 @@ Keep it concise but informative (3-5 paragraphs max).`;
                     </div>
                   );
                 })}
+                {/* Interview Mode Card */}
+                <button 
+                  className="topic-card text-left group border-2 border-synth-violet/50 hover:border-synth-violet"
+                  onClick={() => {
+                    setModal({
+                      isOpen: true,
+                      type: 'prompt',
+                      title: 'START INTERVIEW',
+                      message: 'Enter a topic for the interview...',
+                      defaultValue: '',
+                      onConfirm: (value?: string) => { if (value) startInterview(value); },
+                      onCancel: () => setModal(m => ({ ...m, isOpen: false })),
+                    });
+                  }}
+                >
+                  <div className="flex items-center gap-3 mb-3">
+                    <span className="material-symbols-outlined text-synth-violet group-hover:glow-cyan transition-all">
+                      mic_external_on
+                    </span>
+                    <h3 className="font-headline text-sm font-semibold tracking-wider text-synth-violet">INTERVIEW MODE</h3>
+                  </div>
+                  <p className="text-synth-text-secondary text-xs mb-3">Watch two AIs debate and discuss your topic</p>
+                  <div className="text-2xs text-synth-text-muted font-mono">
+                    TWO AI HOSTS
+                  </div>
+                </button>
+
                 {/* Add Topic Card */}
                 <button 
                   className="topic-card text-left group border-dashed border-2 border-synth-border-subtle hover:border-synth-cyan"
@@ -2099,6 +2284,163 @@ Keep it concise but informative (3-5 paragraphs max).`;
             </div>
           </div>
         )}
+
+        {view === 'interview' && interview.isActive && (
+          <div className="flex-1 flex flex-col relative overflow-hidden">
+            {/* Header */}
+            <div className="flex items-center justify-between p-4 border-b border-synth-border-subtle bg-synth-surface">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={stopInterview}
+                  className="p-2 rounded hover:bg-synth-surface-high transition-colors"
+                >
+                  <span className="material-symbols-outlined text-synth-text">arrow_back</span>
+                </button>
+                <div>
+                  <h2 className="font-headline text-sm font-bold tracking-wider text-synth-violet">
+                    INTERVIEW MODE
+                  </h2>
+                  <p className="text-2xs text-synth-text-muted">Topic: {interview.topic}</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setInterview(prev => ({ ...prev, isRunning: !prev.isRunning }))}
+                  className={`btn-synth ${interview.isRunning ? 'btn-synth-secondary' : 'btn-synth-primary'}`}
+                >
+                  {interview.isRunning ? (
+                    <>
+                      <span className="material-symbols-outlined text-sm">pause</span>
+                      PAUSE
+                    </>
+                  ) : (
+                    <>
+                      <span className="material-symbols-outlined text-sm">play_arrow</span>
+                      RESUME
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+
+            {/* AI Avatars */}
+            <div className="flex justify-center gap-8 p-4 bg-synth-surface-high">
+              <div className="flex flex-col items-center gap-2">
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center ${interview.lastSpeaker === 'host' ? 'bg-synth-cyan/20 border-2 border-synth-cyan' : 'bg-synth-surface border border-synth-border'}`}>
+                  <span className="material-symbols-outlined text-2xl text-synth-cyan">person</span>
+                </div>
+                <span className="text-2xs font-mono text-synth-cyan">HOST</span>
+                <span className="text-2xs text-synth-text-muted">{interview.hostModel}</span>
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <div className={`w-16 h-16 rounded-full flex items-center justify-center ${interview.lastSpeaker === 'expert' ? 'bg-synth-violet/20 border-2 border-synth-violet' : 'bg-synth-surface border border-synth-border'}`}>
+                  <span className="material-symbols-outlined text-2xl text-synth-violet">psychology</span>
+                </div>
+                <span className="text-2xs font-mono text-synth-violet">EXPERT</span>
+                <span className="text-2xs text-synth-text-muted">{interview.expertModel}</span>
+              </div>
+            </div>
+
+            {/* Conversation Stream */}
+            <div className="flex-1 overflow-y-auto p-6 space-y-4">
+              {interview.messages.length === 0 && (
+                <div className="flex flex-col items-center justify-center h-full text-synth-text-muted">
+                  <span className="material-symbols-outlined text-4xl mb-4 opacity-30 animate-pulse">mic_external_on</span>
+                  <p className="text-sm">Starting interview...</p>
+                </div>
+              )}
+              {interview.messages.map(msg => (
+                <div
+                  key={msg.id}
+                  className={`flex ${msg.speaker === 'host' ? 'justify-start' : msg.speaker === 'expert' ? 'justify-end' : 'justify-center'}`}
+                >
+                  <div
+                    className={`max-w-[70%] rounded-lg p-4 ${
+                      msg.speaker === 'host'
+                        ? 'bg-synth-cyan/10 border border-synth-cyan/30'
+                        : msg.speaker === 'expert'
+                        ? 'bg-synth-violet/10 border border-synth-violet/30'
+                        : 'bg-synth-surface border border-synth-border'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2 mb-2">
+                      <span className={`text-2xs font-mono uppercase ${
+                        msg.speaker === 'host' ? 'text-synth-cyan' : msg.speaker === 'expert' ? 'text-synth-violet' : 'text-synth-text-muted'
+                      }`}>
+                        {msg.speaker === 'host' ? 'HOST' : msg.speaker === 'expert' ? 'EXPERT' : 'USER'}
+                      </span>
+                      <span className="text-2xs text-synth-text-muted">
+                        {formatTime(msg.timestamp)}
+                      </span>
+                    </div>
+                    <p className="text-sm text-synth-text whitespace-pre-wrap">{msg.text}</p>
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {/* Audience Question Queue */}
+            {interview.audienceQuestions.filter(q => q.status === 'queued').length > 0 && (
+              <div className="px-6 py-3 bg-synth-surface border-t border-synth-border-subtle">
+                <div className="flex items-center gap-2 text-synth-cyan text-xs">
+                  <span className="material-symbols-outlined text-sm animate-pulse">pending</span>
+                  {interview.audienceQuestions.filter(q => q.status === 'queued').length} question(s) in queue
+                </div>
+              </div>
+            )}
+
+            {/* Controls */}
+            <div className="p-4 border-t border-synth-border-subtle bg-synth-surface">
+              <div className="flex flex-col gap-3">
+                {/* User Question Input */}
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={interview.userQuestion}
+                    onChange={e => setInterview(prev => ({ ...prev, userQuestion: e.target.value }))}
+                    onKeyDown={e => {
+                      if (e.key === 'Enter' && !e.shiftKey && interview.userQuestion.trim()) {
+                        e.preventDefault();
+                        if (!interview.handRaised) raiseHand();
+                      }
+                    }}
+                    placeholder={interview.handRaised ? "Your question is queued..." : "Type your question here..."}
+                    disabled={interview.handRaised}
+                    className="flex-1 input-synth text-sm"
+                  />
+                  <button
+                    onClick={raiseHand}
+                    disabled={interview.handRaised || !interview.userQuestion.trim()}
+                    className={`btn-synth ${interview.handRaised ? 'btn-synth-secondary opacity-50' : 'btn-synth-primary'}`}
+                  >
+                    <span className="material-symbols-outlined text-sm">front_hand</span>
+                    {interview.handRaised ? 'QUEUED' : 'RAISE HAND'}
+                  </button>
+                </div>
+
+                {/* Guidance Input */}
+                <div className="flex gap-2 items-center">
+                  <input
+                    type="text"
+                    value={interview.userGuidance}
+                    onChange={e => setInterview(prev => ({ ...prev, userGuidance: e.target.value }))}
+                    placeholder="Guide the conversation... (e.g., 'Be more respectful', 'Dive deeper')"
+                    className="flex-1 input-synth text-xs"
+                  />
+                  {interview.userGuidance && (
+                    <button
+                      onClick={() => setInterview(prev => ({ ...prev, userGuidance: '' }))}
+                      className="p-2 rounded hover:bg-synth-surface-high transition-colors text-synth-text-muted"
+                    >
+                      <span className="material-symbols-outlined text-sm">close</span>
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
       </main>
       
       {/* Terminal Log */}
