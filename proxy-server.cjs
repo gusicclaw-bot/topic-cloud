@@ -21,7 +21,7 @@ app.get('/health', (req, res) => {
 });
 
 // Proxy requests to LLM APIs
-app.all(/^\/proxy(\?.*)?$/, async (req, res) => {
+app.all(/^\/proxy(\/.*)?$/, async (req, res) => {
   const targetUrl = req.query.url;
 
   if (!targetUrl) {
@@ -116,7 +116,7 @@ const LLM_ENDPOINTS = {
 };
 
 // Generic LLM proxy endpoint
-app.post(/^\/llm(\?.*)?$/, async (req, res) => {
+app.post(/^\/llm(\/.*)?$/, async (req, res) => {
   const targetBaseUrl = req.headers['x-llm-base-url'];
 
   if (!targetBaseUrl) {
@@ -124,7 +124,7 @@ app.post(/^\/llm(\?.*)?$/, async (req, res) => {
   }
 
   const path = req.params[0];
-  const targetUrl = targetBaseUrl.replace(/\/$/, '') + '/' + path;
+  const targetUrl = targetBaseUrl.replace(/\/$/, '') + path;
 
   try {
     const response = await fetch(targetUrl, {
