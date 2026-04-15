@@ -54,11 +54,11 @@ const PROXY_URL = 'http://localhost:3001';
 
 async function sendToModel(settings: Settings, messages: { role: string; content: string }[]) {
   // Route through proxy to avoid CORS
-  const response = await fetch(`${PROXY_URL}/llm/chat/completions`, {
+  const response = await fetch(`${PROXY_URL}/llm/v1/chat/completions/`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
-      'X-LLM-Base-URL': settings.baseUrl,
+      'X-LLM-Base-URL': settings.baseUrl.replace(/\/v1$/, ''),
       ...(settings.apiKey && { Authorization: `Bearer ${settings.apiKey}` }),
     },
     body: JSON.stringify({
