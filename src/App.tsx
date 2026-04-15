@@ -342,6 +342,14 @@ function App() {
   // Archive state
   const [showArchived, setShowArchived] = useState(false);
 
+  // Sort state
+  type SortOption = 'newest' | 'oldest' | 'az' | 'za';
+  const [sortOption, setSortOption] = useState<SortOption>('newest');
+
+  // Rename state
+  const [editingTitle, setEditingTitle] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Modal helpers
@@ -790,15 +798,49 @@ Keep it concise but informative (3-5 paragraphs max).`;
     setLastAction(`Unarchived "${chat?.title}"`);
   }
 
+  // Rename functions
+  function startEditTitle() {
+    if (currentChat) {
+      setEditTitle(currentChat.title);
+      setEditingTitle(true);
+    }
+  }
+
+  function saveEditTitle() {
+    if (currentChat && editTitle.trim()) {
+      setChats(prev => prev.map(c =>
+        c.id === currentChat.id ? { ...c, title: editTitle.trim() } : c
+      ));
+      setLastAction(`Renamed to "${editTitle.trim()}"`);
+      setEditingTitle(false);
+    }
+  }
+
+  function cancelEditTitle() {
+    setEditingTitle(false);
+    setEditTitle('');
+  }
+
   // Derived state
   const currentTopic = useMemo(() => topics.find(t => t.id === activeTopic), [activeTopic, topics]);
   const currentChat = useMemo(() => chats.find(c => c.id === activeChat), [chats, activeChat]);
-  const topicChats = useMemo(() =>
-    chats.filter(c => c.topicId === activeTopic && !c.isArchived).sort((a, b) => 
-      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
-    ),
-    [chats, activeTopic]
-  );
+  const topicChats = useMemo(() => {
+    const filtered = chats.filter(c => c.topicId === activeTopic && !c.isArchived);
+    return filtered.sort((a, b) => {
+      switch (sortOption) {
+        case 'newest':
+          return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+        case 'oldest':
+          return new Date(a.updatedAt).getTime() - new Date(b.updatedAt).getTime();
+        case 'az':
+          return a.title.localeCompare(b.title);
+        case 'za':
+          return b.title.localeCompare(a.title);
+        default:
+          return 0;
+      }
+    });
+  }, [chats, activeTopic, sortOption]);
 
   // Archived chats for current topic
   const archivedTopicChats = useMemo(() =>
@@ -1275,9 +1317,21 @@ Keep it concise but informative (3-5 paragraphs max).`;
                       {currentTopic?.name?.toUpperCase() || 'THREADS'}
                     </span>
                   </div>
-                  <span className="text-2xs px-2 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
-                    {topicChats.length}
-                  </span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-2xs px-2 py-0.5 bg-synth-surface-highest text-synth-text-muted rounded">
+                      {topicChats.length}
+                    </span>
+                    <select
+                      value={sortOption}
+                      onChange={(e) => setSortOption(e.target.value as SortOption)}
+                      className="bg-synth-surface border border-synth-border-subtle rounded px-1 py-0.5 text-2xs text-synth-text-muted focus:outline-none focus:border-synth-cyan cursor-pointer"
+                    >
+                      <option value="newest">Newest</option>
+                      <option value="oldest">Oldest</option>
+                      <option value="az">A-Z</option>
+                      <option value="za">Z-A</option>
+                    </select>
+                  </div>
                 </div>
 
                 {/* Selection Mode Controls */}
@@ -1599,9 +1653,52 @@ Keep it concise but informative (3-5 paragraphs max).`;
                   </button>
                 )}
                 <div className="flex-1">
-                  <h2 className="font-headline text-sm font-semibold tracking-wider">
-                    {currentChat?.title?.toUpperCase() || 'SELECT THREAD'}
-                  </h2>
+                  {editingTitle ? (
+                    // Edit mode
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="text"
+                        value={editTitle}
+                        onChange={(e) => setEditTitle(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') saveEditTitle();
+                          if (e.key === 'Escape') cancelEditTitle();
+                        }}
+                        className="flex-1 bg-synth-surface border border-synth-cyan rounded px-2 py-1 text-sm text-synth-text focus:outline-none"
+                        autoFocus
+                      />
+                      <button
+                        className="p-1 text-synth-cyan hover:bg-synth-cyan/20 rounded"
+                        onClick={saveEditTitle}
+                        title="Save"
+                      >
+                        <span className="material-symbols-outlined text-sm">check</span>
+                      </button>
+                      <button
+                        className="p-1 text-synth-text-muted hover:text-synth-text hover:bg-synth-surface-high rounded"
+                        onClick={cancelEditTitle}
+                        title="Cancel"
+                      >
+                        <span className="material-symbols-outlined text-sm">close</span>
+                      </button>
+                    </div>
+                  ) : (
+                    // View mode
+                    <div className="flex items-center gap-2">
+                      <h2 className="font-headline text-sm font-semibold tracking-wider">
+                        {currentChat?.title?.toUpperCase() || 'SELECT THREAD'}
+                      </h2>
+                      {currentChat && (
+                        <button
+                          className="p-1 text-synth-text-muted hover:text-synth-cyan transition-colors"
+                          onClick={startEditTitle}
+                          title="Rename"
+                        >
+                          <span className="material-symbols-outlined text-sm">edit</span>
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </div>
                 <div className="flex items-center gap-3">
                   {getStatusDot()}
