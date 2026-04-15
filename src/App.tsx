@@ -65,7 +65,6 @@ async function sendToModel(settings: Settings, messages: { role: string; content
       model: settings.model,
       messages,
       temperature: 0.7,
-      max_tokens: 1000,
     }),
   });
 
