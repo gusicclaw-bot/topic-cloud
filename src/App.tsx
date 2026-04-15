@@ -23,6 +23,8 @@ const DEFAULT_SETTINGS: Settings = {
   enableWebSearch: false,
   hostBaseUrl: '',
   expertBaseUrl: '',
+  hostModel: '',
+  expertModel: '',
 };
 
 // Utilities
@@ -358,8 +360,8 @@ function App() {
   const [interview, setInterview] = useState({
     isActive: false,
     topic: '',
-    hostModel: 'qwen3.5-9b',
-    expertModel: 'qwen3.5-35b-a3b',
+    hostModel: '',
+    expertModel: '',
     messages: [] as InterviewMessage[],
     audienceQuestions: [] as AudienceQuestion[],
     handRaised: false,
@@ -909,6 +911,8 @@ Keep it concise but informative (3-5 paragraphs max).`;
       ...prev,
       isActive: true,
       topic,
+      hostModel: settings.hostModel || settings.model,
+      expertModel: settings.expertModel || settings.model,
       messages: [],
       audienceQuestions: [],
       handRaised: false,
@@ -1038,6 +1042,14 @@ Keep it concise but informative (3-5 paragraphs max).`;
         userQuestion: '',
       }));
     }
+  }
+
+  function removeQuestion(questionId: string) {
+    setInterview(prev => ({
+      ...prev,
+      audienceQuestions: prev.audienceQuestions.filter(q => q.id !== questionId),
+      handRaised: false,
+    }));
   }
 
   function takeoverInterview(partner: 'host' | 'expert') {
@@ -2342,6 +2354,16 @@ Keep it concise but informative (3-5 paragraphs max).`;
                       <p className="text-2xs text-synth-text-muted mt-2">
                         Leave empty to use default endpoint
                       </p>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2 mt-4">
+                        Host Model Name
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.hostModel}
+                        onChange={e => updateSettings('hostModel', e.target.value)}
+                        placeholder="google/gemma-4-26b-a4b"
+                        className="input-synth"
+                      />
                     </div>
                     
                     <div>
@@ -2362,6 +2384,16 @@ Keep it concise but informative (3-5 paragraphs max).`;
                       <p className="text-2xs text-synth-text-muted mt-2">
                         Leave empty to use default endpoint
                       </p>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2 mt-4">
+                        Expert Model Name
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.expertModel}
+                        onChange={e => updateSettings('expertModel', e.target.value)}
+                        placeholder="google/gemma-4-26b-a4b"
+                        className="input-synth"
+                      />
                     </div>
                   </div>
                 </div>
@@ -2505,13 +2537,22 @@ Keep it concise but informative (3-5 paragraphs max).`;
                   </button>
                 )}
                 {!interview.isConversational && interview.isRunning && (
-                  <button
-                    onClick={() => takeoverInterview('host')}
-                    className="btn-synth btn-synth-primary"
-                  >
-                    <span className="material-symbols-outlined text-sm">front_hand</span>
-                    TAKE OVER
-                  </button>
+                  <>
+                    <button
+                      onClick={() => takeoverInterview('host')}
+                      className="btn-synth btn-synth-primary"
+                    >
+                      <span className="material-symbols-outlined text-sm">front_hand</span>
+                      ASK HOST
+                    </button>
+                    <button
+                      onClick={() => takeoverInterview('expert')}
+                      className="btn-synth btn-synth-secondary"
+                    >
+                      <span className="material-symbols-outlined text-sm">front_hand</span>
+                      ASK EXPERT
+                    </button>
+                  </>
                 )}
                 {interview.isConversational && (
                   <button
@@ -2583,11 +2624,23 @@ Keep it concise but informative (3-5 paragraphs max).`;
 
             {/* Audience Question Queue */}
             {interview.audienceQuestions.filter(q => q.status === 'queued').length > 0 && (
-              <div className="px-6 py-3 bg-synth-surface border-t border-synth-border-subtle">
-                <div className="flex items-center gap-2 text-synth-cyan text-xs">
+              <div className="px-6 py-3 bg-synth-surface border-t border-synth-border-subtle space-y-2">
+                <div className="flex items-center gap-2 text-synth-cyan text-xs mb-2">
                   <span className="material-symbols-outlined text-sm animate-pulse">pending</span>
                   {interview.audienceQuestions.filter(q => q.status === 'queued').length} question(s) in queue
                 </div>
+                {interview.audienceQuestions.filter(q => q.status === 'queued').map(q => (
+                  <div key={q.id} className="flex items-center justify-between gap-2 text-xs bg-synth-surface-high p-2 rounded border border-synth-border-subtle">
+                    <span className="text-synth-text flex-1">{q.text}</span>
+                    <button
+                      onClick={() => removeQuestion(q.id)}
+                      className="p-1 hover:bg-synth-surface rounded text-synth-text-muted hover:text-red-400 transition-colors"
+                      title="Remove question"
+                    >
+                      <span className="material-symbols-outlined text-sm">close</span>
+                    </button>
+                  </div>
+                ))}
               </div>
             )}
 

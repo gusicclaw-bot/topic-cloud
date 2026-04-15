@@ -42,6 +42,8 @@ export interface Settings {
   enableWebSearch: boolean;
   hostBaseUrl: string;  // LM Studio URL for interview Host
   expertBaseUrl: string; // LM Studio URL for interview Expert
+  hostModel: string; // Model name for interview Host
+  expertModel: string; // Model name for interview Expert
 }
 
 export interface ModalState {
