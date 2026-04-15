@@ -21,6 +21,8 @@ const DEFAULT_SETTINGS: Settings = {
   apiKey: '',
   braveApiKey: '',
   enableWebSearch: false,
+  hostBaseUrl: '',
+  expertBaseUrl: '',
 };
 
 // Utilities
@@ -982,7 +984,15 @@ Keep it concise but informative (3-5 paragraphs max).`;
     }
 
     try {
-      const response = await sendToModel(settings, apiMessages);
+      // Use correct settings for Host vs Expert
+      const interviewSettings = {
+        ...settings,
+        baseUrl: isHostTurn 
+          ? (settings.hostBaseUrl || settings.baseUrl) 
+          : (settings.expertBaseUrl || settings.baseUrl),
+        model: isHostTurn ? currentInterview.hostModel : currentInterview.expertModel,
+      };
+      const response = await sendToModel(interviewSettings, apiMessages);
       const newMessage = createInterviewMessage(speaker, response);
 
       let updatedQuestions = currentInterview.audienceQuestions;
@@ -1077,7 +1087,15 @@ Keep it concise but informative (3-5 paragraphs max).`;
     apiMessages.push({ role: 'user', content: text });
 
     try {
-      const response = await sendToModel(settings, apiMessages);
+      // Use correct settings for Host vs Expert
+      const interviewSettings = {
+        ...settings,
+        baseUrl: partner === 'host' 
+          ? (settings.hostBaseUrl || settings.baseUrl) 
+          : (settings.expertBaseUrl || settings.baseUrl),
+        model: partner === 'host' ? currentInterview.hostModel : currentInterview.expertModel,
+      };
+      const response = await sendToModel(interviewSettings, apiMessages);
       const aiMessage: InterviewMessage = {
         id: createId('imsg'),
         speaker: partner,
@@ -2271,6 +2289,56 @@ Keep it concise but informative (3-5 paragraphs max).`;
                         {testResult.toUpperCase()}
                       </div>
                     )}
+                  </div>
+                </div>
+                
+                {/* Interview Mode */}
+                <div className="bg-synth-surface border border-synth-border-subtle p-6 md:col-span-2">
+                  <div className="flex items-center gap-2 mb-6 pb-4 border-b border-synth-border-subtle">
+                    <span className="material-symbols-outlined text-synth-violet">psychology</span>
+                    <h2 className="font-headline text-sm font-bold tracking-wider">INTERVIEW_MODE</h2>
+                  </div>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="w-2 h-2 rounded-full bg-synth-cyan" />
+                        <span className="text-xs text-synth-cyan font-medium">HOST</span>
+                      </div>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                        Host LM Studio URL
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.hostBaseUrl}
+                        onChange={e => updateSettings('hostBaseUrl', e.target.value)}
+                        placeholder="http://192.168.1.100:1234/v1"
+                        className="input-synth"
+                      />
+                      <p className="text-2xs text-synth-text-muted mt-2">
+                        Leave empty to use default endpoint
+                      </p>
+                    </div>
+                    
+                    <div>
+                      <div className="flex items-center gap-2 mb-3">
+                        <span className="w-2 h-2 rounded-full bg-synth-violet" />
+                        <span className="text-xs text-synth-violet font-medium">EXPERT</span>
+                      </div>
+                      <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2">
+                        Expert LM Studio URL
+                      </label>
+                      <input
+                        type="text"
+                        value={settings.expertBaseUrl}
+                        onChange={e => updateSettings('expertBaseUrl', e.target.value)}
+                        placeholder="http://192.168.1.101:1234/v1"
+                        className="input-synth"
+                      />
+                      <p className="text-2xs text-synth-text-muted mt-2">
+                        Leave empty to use default endpoint
+                      </p>
+                    </div>
                   </div>
                 </div>
                 

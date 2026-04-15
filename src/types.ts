@@ -40,6 +40,8 @@ export interface Settings {
   apiKey: string;
   braveApiKey: string;
   enableWebSearch: boolean;
+  hostBaseUrl: string;  // LM Studio URL for interview Host
+  expertBaseUrl: string; // LM Studio URL for interview Expert
 }
 
 export interface ModalState {
