@@ -350,6 +350,9 @@ function App() {
   const [editingTitle, setEditingTitle] = useState(false);
   const [editTitle, setEditTitle] = useState('');
 
+  // Quote selection state
+  const [quoteSelection, setQuoteSelection] = useState<{ text: string; x: number; y: number } | null>(null);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Modal helpers
@@ -550,6 +553,17 @@ function App() {
     window.addEventListener('resize', checkMobile);
     return () => window.removeEventListener('resize', checkMobile);
   }, []);
+
+  // Handle text selection for quote
+  useEffect(() => {
+    const handleMouseUp = () => {
+      // Small delay to ensure selection is complete
+      setTimeout(handleTextSelection, 10);
+    };
+    
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => document.removeEventListener('mouseup', handleMouseUp);
+  }, [handleTextSelection]);
 
   // Toggle expand for tree
   function toggleExpanded(chatId: string) {
@@ -819,6 +833,42 @@ Keep it concise but informative (3-5 paragraphs max).`;
   function cancelEditTitle() {
     setEditingTitle(false);
     setEditTitle('');
+  }
+
+  // Quote selection functions
+  function handleTextSelection() {
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.toString().trim()) {
+      setQuoteSelection(null);
+      return;
+    }
+
+    const text = selection.toString().trim();
+    if (text.length < 3) {
+      setQuoteSelection(null);
+      return;
+    }
+
+    // Get position of selection
+    const range = selection.getRangeAt(0);
+    const rect = range.getBoundingClientRect();
+    
+    setQuoteSelection({
+      text,
+      x: rect.left + rect.width / 2,
+      y: rect.top - 10,
+    });
+  }
+
+  function applyQuote() {
+    if (!quoteSelection) return;
+
+    const quotedText = `> "${quoteSelection.text}"
+
+`;
+    setInput(prev => prev ? prev + '\n\n' + quotedText : quotedText);
+    setQuoteSelection(null);
+    window.getSelection()?.removeAllRanges();
   }
 
   // Derived state
@@ -1741,6 +1791,23 @@ Keep it concise but informative (3-5 paragraphs max).`;
               {/* Messages */}
               {currentChat ? (
                 <>
+                  {/* Floating Quote Button */}
+                  {quoteSelection && (
+                    <button
+                      className="fixed z-50 px-3 py-2 bg-synth-cyan text-synth-bg rounded shadow-lg hover:bg-synth-cyan/90 transition-all text-xs font-medium animate-fade-in"
+                      style={{
+                        left: `${quoteSelection.x}px`,
+                        top: `${quoteSelection.y}px`,
+                        transform: 'translate(-50%, -100%)',
+                      }}
+                      onClick={applyQuote}
+                    >
+                      <span className="flex items-center gap-1">
+                        <span className="material-symbols-outlined text-sm">format_quote</span>
+                        Quote
+                      </span>
+                    </button>
+                  )}
                   <div className="flex-1 overflow-y-auto p-6 space-y-4">
                     {currentChat.messages.length === 0 && (
                       <div className="flex flex-col items-center justify-center h-full text-synth-text-muted">
