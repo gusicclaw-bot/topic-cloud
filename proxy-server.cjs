@@ -123,7 +123,7 @@ app.post(/^\/llm(\/.*)?$/, async (req, res) => {
     return res.status(400).json({ error: 'Missing X-LLM-Base-URL header' });
   }
 
-  const path = req.params[0];
+  const path = req.params[0] ? req.params[0].replace(/\/$/, '') + '/' : '';
   const targetUrl = targetBaseUrl.replace(/\/$/, '') + path;
 
   try {
