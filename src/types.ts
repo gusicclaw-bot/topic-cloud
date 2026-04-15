@@ -1,5 +1,5 @@
 // Types
-export type TopicId = 'golf' | 'football' | 'gaming' | 'work' | 'ideas' | 'learning';
+export type TopicId = 'explore' | 'learn' | 'create' | 'refine' | 'review' | 'archive';
 export type View = 'landing' | 'chat' | 'settings';
 export type ModelStatus = 'ready' | 'testing' | 'error' | 'offline';
 export type ModalType = 'confirm' | 'prompt' | 'alert';

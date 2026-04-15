@@ -6,12 +6,12 @@ import { auth, chatApi } from './pocketbase';
 
 // Constants
 const DEFAULT_TOPICS: Topic[] = [
-  { id: 'golf', name: 'Golf', description: 'Swing thoughts and practice notes', icon: 'sports_golf' },
-  { id: 'football', name: 'Football', description: 'Matches, tactics, and analysis', icon: 'sports_soccer' },
-  { id: 'gaming', name: 'Gaming', description: 'What to play next', icon: 'sports_esports' },
-  { id: 'work', name: 'Work', description: 'Projects and decisions', icon: 'work' },
-  { id: 'ideas', name: 'Ideas', description: 'Loose thoughts and sparks', icon: 'lightbulb' },
-  { id: 'learning', name: 'Learning', description: 'Notes and insights', icon: 'school' },
+  { id: 'explore', name: 'Explore', description: 'Explore new ideas and research', icon: 'explore' },
+  { id: 'learn', name: 'Learn', description: 'Learn new stuff and gain knowledge', icon: 'school' },
+  { id: 'create', name: 'Create', description: 'Ideation and brainstorming', icon: 'lightbulb' },
+  { id: 'refine', name: 'Refine', description: 'Improve and polish your work', icon: 'tune' },
+  { id: 'review', name: 'Review', description: 'Revisit and reflect on topics', icon: 'replay' },
+  { id: 'archive', name: 'Archive', description: 'Completed and parked items', icon: 'inventory_2' },
 ];
 
 const DEFAULT_SETTINGS: Settings = {
@@ -1223,7 +1223,7 @@ Keep it concise but informative (3-5 paragraphs max).`;
               <div className="grid grid-cols-2 md:grid-cols-3 gap-4 w-full max-w-4xl">
                 {topics.map(topic => {
                   const count = chats.filter(c => c.topicId === topic.id).length;
-                  const isDefaultTopic = ['golf', 'football', 'gaming', 'work', 'ideas', 'learning'].includes(topic.id);
+                  const isDefaultTopic = ['explore', 'learn', 'create', 'refine', 'review', 'archive'].includes(topic.id);
                   return (
                     <div key={topic.id} className="topic-card text-left group relative">
                       <button 
