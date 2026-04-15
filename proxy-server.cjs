@@ -9,7 +9,7 @@ const PORT = process.env.PROXY_PORT || 3001;
 
 // Enable CORS for the React dev server
 app.use(cors({
-  origin: ['http://localhost:5173', 'http://127.0.0.1:5173'],
+  origin: '*',
   credentials: true
 }));
 
