@@ -339,6 +339,9 @@ function App() {
     chatToMove?: Chat;
   }>({ isOpen: false, mode: 'add' });
 
+  // Archive state
+  const [showArchived, setShowArchived] = useState(false);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Modal helpers
@@ -766,11 +769,40 @@ Keep it concise but informative (3-5 paragraphs max).`;
     setTopicModal({ isOpen: false, mode: 'add' });
   }
 
+  // Archive functions
+  function archiveChat(chatId: string) {
+    const chat = chats.find(c => c.id === chatId);
+    setChats(prev => prev.map(c => 
+      c.id === chatId ? { ...c, isArchived: true } : c
+    ));
+    setLastAction(`Archived "${chat?.title}"`);
+    // If archived chat is active, go back to landing
+    if (activeChat === chatId) {
+      setActiveChat(null);
+    }
+  }
+
+  function unarchiveChat(chatId: string) {
+    const chat = chats.find(c => c.id === chatId);
+    setChats(prev => prev.map(c => 
+      c.id === chatId ? { ...c, isArchived: false } : c
+    ));
+    setLastAction(`Unarchived "${chat?.title}"`);
+  }
+
   // Derived state
   const currentTopic = useMemo(() => topics.find(t => t.id === activeTopic), [activeTopic, topics]);
   const currentChat = useMemo(() => chats.find(c => c.id === activeChat), [chats, activeChat]);
   const topicChats = useMemo(() =>
-    chats.filter(c => c.topicId === activeTopic).sort((a, b) => 
+    chats.filter(c => c.topicId === activeTopic && !c.isArchived).sort((a, b) => 
+      new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+    ),
+    [chats, activeTopic]
+  );
+
+  // Archived chats for current topic
+  const archivedTopicChats = useMemo(() =>
+    chats.filter(c => c.topicId === activeTopic && c.isArchived).sort((a, b) => 
       new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
     ),
     [chats, activeTopic]
@@ -1482,7 +1514,56 @@ Keep it concise but informative (3-5 paragraphs max).`;
                     </button>
                   </div>
                 ) : (
-                  <TreeView nodes={buildChatTree(topicChats)} />
+                  <>
+                    <TreeView nodes={buildChatTree(topicChats)} />
+                    
+                    {/* Archived Section */}
+                    {archivedTopicChats.length > 0 && (
+                      <div className="border-t border-synth-border-subtle mt-2">
+                        <button
+                          className="w-full flex items-center justify-between px-4 py-2 text-2xs text-synth-text-muted hover:text-synth-text hover:bg-synth-surface-high transition-colors"
+                          onClick={() => setShowArchived(!showArchived)}
+                        >
+                          <span className="flex items-center gap-2">
+                            <span className="material-symbols-outlined text-sm">archive</span>
+                            ARCHIVED ({archivedTopicChats.length})
+                          </span>
+                          <span className="material-symbols-outlined text-sm">
+                            {showArchived ? 'expand_less' : 'expand_more'}
+                          </span>
+                        </button>
+                        {showArchived && (
+                          <div className="pb-2">
+                            {archivedTopicChats.map(chat => (
+                              <div
+                                key={chat.id}
+                                className={`p-3 rounded cursor-pointer transition-colors border-l-2 ${
+                                  chat.id === activeChat
+                                    ? 'bg-synth-surface-high border-synth-cyan'
+                                    : 'hover:bg-synth-surface-high border-transparent'
+                                }`}
+                                onClick={() => {
+                                  setActiveChat(chat.id);
+                                  setActiveTopic(chat.topicId as TopicId);
+                                }}
+                              >
+                                <div className="flex items-center gap-2 mb-1">
+                                  <span className="material-symbols-outlined text-synth-text-muted text-sm">lock</span>
+                                  <span className="text-2xs text-synth-text-muted">
+                                    {formatRelative(chat.updatedAt)}
+                                  </span>
+                                </div>
+                                <p className="text-sm font-medium truncate mb-1">{chat.title}</p>
+                                <p className="text-xs text-synth-text-muted truncate">
+                                  {chat.messages.length} messages
+                                </p>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </>
                 )}
               </div>
             </aside>
@@ -1535,6 +1616,26 @@ Keep it concise but informative (3-5 paragraphs max).`;
                     >
                       <span className="material-symbols-outlined text-sm">drive_file_move</span>
                       MOVE
+                    </button>
+                  )}
+                  {currentChat && !currentChat.isArchived && (
+                    <button
+                      className="flex items-center gap-1 px-2 py-1 text-2xs text-synth-text-secondary hover:text-synth-amber border border-synth-border-subtle hover:border-synth-amber rounded transition-colors"
+                      onClick={() => archiveChat(currentChat.id)}
+                      title="Archive this thread"
+                    >
+                      <span className="material-symbols-outlined text-sm">archive</span>
+                      ARCHIVE
+                    </button>
+                  )}
+                  {currentChat && currentChat.isArchived && (
+                    <button
+                      className="flex items-center gap-1 px-2 py-1 text-2xs text-synth-text-secondary hover:text-synth-cyan border border-synth-border-subtle hover:border-synth-cyan rounded transition-colors"
+                      onClick={() => unarchiveChat(currentChat.id)}
+                      title="Unarchive this thread"
+                    >
+                      <span className="material-symbols-outlined text-sm">unarchive</span>
+                      UNARCHIVE
                     </button>
                   )}
                 </div>
