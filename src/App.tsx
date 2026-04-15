@@ -1970,6 +1970,16 @@ Keep it concise but informative (3-5 paragraphs max).`;
                       UNARCHIVE
                     </button>
                   )}
+                  {currentChat && (
+                    <button
+                      className="flex items-center gap-1 px-2 py-1 text-2xs text-synth-violet border border-synth-violet/50 hover:border-synth-violet rounded transition-colors"
+                      onClick={() => startInterview(currentChat.title)}
+                      title="Branch to Interview Mode"
+                    >
+                      <span className="material-symbols-outlined text-sm">mic_external_on</span>
+                      INTERVIEW
+                    </button>
+                  )}
                 </div>
               </div>
               
