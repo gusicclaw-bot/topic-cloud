@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { marked } from 'marked';
 import './styles.css';
 import type { TopicId, View, ModelStatus, ModalState, Topic, Message, Chat, Settings, InterviewMessage, InterviewSpeaker, AudienceQuestion } from './types';
-import { auth, chatApi } from './pocketbase';
+import { auth, chatApi, settingsApi } from './pocketbase';
 
 // Constants
 const DEFAULT_TOPICS: Topic[] = [
@@ -1228,23 +1228,48 @@ Keep it concise but informative (3-5 paragraphs max).`;
     loadChats();
   }, [isAuthenticated]);
 
-  // Load settings from localStorage (fallback, can be moved to server too)
+  // Load settings from PocketBase (with localStorage fallback)
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const saved = localStorage.getItem('topic-cloud-settings');
-    if (saved) {
+    async function loadSettings() {
       try {
-        const data = JSON.parse(saved);
-        setSettings({ ...DEFAULT_SETTINGS, ...data });
+        // Try to load from PocketBase first
+        const serverSettings = await settingsApi.getSettings();
+        if (serverSettings) {
+          setSettings({ ...DEFAULT_SETTINGS, ...serverSettings });
+          // Also save to localStorage as backup
+          localStorage.setItem('topic-cloud-settings', JSON.stringify(serverSettings));
+          return;
+        }
       } catch {}
+
+      // Fall back to localStorage
+      const saved = localStorage.getItem('topic-cloud-settings');
+      if (saved) {
+        try {
+          const data = JSON.parse(saved);
+          setSettings({ ...DEFAULT_SETTINGS, ...data });
+        } catch {}
+      }
     }
+
+    loadSettings();
   }, [isAuthenticated]);
 
-  // Save settings to localStorage
+  // Save settings to PocketBase and localStorage
   useEffect(() => {
     if (!isAuthenticated) return;
-    localStorage.setItem('topic-cloud-settings', JSON.stringify(settings));
+
+    async function saveSettings() {
+      try {
+        await settingsApi.saveSettings(settings);
+      } catch {}
+      // Always save to localStorage as backup
+      localStorage.setItem('topic-cloud-settings', JSON.stringify(settings));
+    }
+
+    saveSettings();
   }, [settings, isAuthenticated]);
 
   useEffect(() => {
