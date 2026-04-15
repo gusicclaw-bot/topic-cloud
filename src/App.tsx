@@ -367,6 +367,8 @@ function App() {
     isRunning: false,
     turnCount: 0,
     lastSpeaker: 'host' as InterviewSpeaker,
+    isConversational: false,
+    conversationalPartner: 'host' as 'host' | 'expert',
   });
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -1027,6 +1029,81 @@ Keep it concise but informative (3-5 paragraphs max).`;
         userQuestion: '',
       }));
     }
+  }
+
+  function takeoverInterview(partner: 'host' | 'expert') {
+    setInterview(prev => ({
+      ...prev,
+      isConversational: true,
+      conversationalPartner: partner,
+      isRunning: false,
+      handRaised: false,
+      userQuestion: '',
+    }));
+  }
+
+  async function sendConversationalMessage(text: string) {
+    if (!text.trim() || !interview.isConversational) return;
+
+    const currentInterview = interview;
+    const partner = currentInterview.conversationalPartner;
+    const systemPrompt = partner === 'host' ? HOST_SYSTEM : EXPERT_SYSTEM;
+
+    // Add user message
+    const userMessage: InterviewMessage = {
+      id: createId('imsg'),
+      speaker: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+
+    setInterview(prev => ({
+      ...prev,
+      messages: [...prev.messages, userMessage],
+    }));
+
+    // Build API messages
+    const apiMessages: { role: string; content: string }[] = [
+      { role: 'system', content: systemPrompt },
+    ];
+
+    // Add conversation history
+    currentInterview.messages.forEach(msg => {
+      const role = msg.speaker === 'user' ? 'user' : (msg.speaker === 'host' ? 'assistant' : 'user');
+      apiMessages.push({ role, content: msg.text });
+    });
+
+    // Add user message
+    apiMessages.push({ role: 'user', content: text });
+
+    try {
+      const response = await sendToModel(settings, apiMessages);
+      const aiMessage: InterviewMessage = {
+        id: createId('imsg'),
+        speaker: partner,
+        text: response,
+        timestamp: new Date().toISOString(),
+      };
+
+      setInterview(prev => ({
+        ...prev,
+        messages: [...prev.messages, aiMessage],
+        lastSpeaker: partner,
+      }));
+    } catch (error) {
+      console.error('Conversational message error:', error);
+    }
+  }
+
+  function resumeInterview() {
+    setInterview(prev => ({
+      ...prev,
+      isConversational: false,
+      conversationalPartner: 'host',
+      isRunning: true,
+    }));
+    // Resume auto interview
+    runInterviewTurn();
   }
 
   // Derived state
@@ -2314,22 +2391,45 @@ Keep it concise but informative (3-5 paragraphs max).`;
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  onClick={() => setInterview(prev => ({ ...prev, isRunning: !prev.isRunning }))}
-                  className={`btn-synth ${interview.isRunning ? 'btn-synth-secondary' : 'btn-synth-primary'}`}
-                >
-                  {interview.isRunning ? (
-                    <>
-                      <span className="material-symbols-outlined text-sm">pause</span>
-                      PAUSE
-                    </>
-                  ) : (
-                    <>
-                      <span className="material-symbols-outlined text-sm">play_arrow</span>
-                      RESUME
-                    </>
-                  )}
-                </button>
+                {!interview.isConversational && interview.isRunning && (
+                  <button
+                    onClick={() => setInterview(prev => ({ ...prev, isRunning: false }))}
+                    className="btn-synth btn-synth-secondary"
+                  >
+                    <span className="material-symbols-outlined text-sm">pause</span>
+                    PAUSE
+                  </button>
+                )}
+                {!interview.isConversational && !interview.isRunning && interview.messages.length > 0 && (
+                  <button
+                    onClick={() => {
+                      setInterview(prev => ({ ...prev, isRunning: true }));
+                      runInterviewTurn();
+                    }}
+                    className="btn-synth btn-synth-primary"
+                  >
+                    <span className="material-symbols-outlined text-sm">play_arrow</span>
+                    RESUME
+                  </button>
+                )}
+                {!interview.isConversational && interview.isRunning && (
+                  <button
+                    onClick={() => takeoverInterview('host')}
+                    className="btn-synth btn-synth-primary"
+                  >
+                    <span className="material-symbols-outlined text-sm">front_hand</span>
+                    TAKE OVER
+                  </button>
+                )}
+                {interview.isConversational && (
+                  <button
+                    onClick={resumeInterview}
+                    className="btn-synth btn-synth-secondary"
+                  >
+                    <span className="material-symbols-outlined text-sm">psychology</span>
+                    RESUME AUTO
+                  </button>
+                )}
               </div>
             </div>
 
@@ -2401,52 +2501,78 @@ Keep it concise but informative (3-5 paragraphs max).`;
 
             {/* Controls */}
             <div className="p-4 border-t border-synth-border-subtle bg-synth-surface">
-              <div className="flex flex-col gap-3">
-                {/* User Question Input */}
-                <div className="flex gap-2">
-                  <input
-                    type="text"
-                    value={interview.userQuestion}
-                    onChange={e => setInterview(prev => ({ ...prev, userQuestion: e.target.value }))}
-                    onKeyDown={e => {
-                      if (e.key === 'Enter' && !e.shiftKey && interview.userQuestion.trim()) {
-                        e.preventDefault();
-                        if (!interview.handRaised) raiseHand();
-                      }
-                    }}
-                    placeholder={interview.handRaised ? "Your question is queued..." : "Type your question here..."}
-                    disabled={interview.handRaised}
-                    className="flex-1 input-synth text-sm"
-                  />
-                  <button
-                    onClick={raiseHand}
-                    disabled={interview.handRaised || !interview.userQuestion.trim()}
-                    className={`btn-synth ${interview.handRaised ? 'btn-synth-secondary opacity-50' : 'btn-synth-primary'}`}
-                  >
-                    <span className="material-symbols-outlined text-sm">front_hand</span>
-                    {interview.handRaised ? 'QUEUED' : 'RAISE HAND'}
-                  </button>
-                </div>
-
-                {/* Guidance Input */}
-                <div className="flex gap-2 items-center">
-                  <input
-                    type="text"
-                    value={interview.userGuidance}
-                    onChange={e => setInterview(prev => ({ ...prev, userGuidance: e.target.value }))}
-                    placeholder="Guide the conversation... (e.g., 'Be more respectful', 'Dive deeper')"
-                    className="flex-1 input-synth text-xs"
-                  />
-                  {interview.userGuidance && (
+              {!interview.isConversational ? (
+                <div className="flex flex-col gap-3">
+                  {/* User Question Input */}
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={interview.userQuestion}
+                      onChange={e => setInterview(prev => ({ ...prev, userQuestion: e.target.value }))}
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey && interview.userQuestion.trim()) {
+                          e.preventDefault();
+                          if (!interview.handRaised) raiseHand();
+                        }
+                      }}
+                      placeholder={interview.handRaised ? "Your question is queued..." : "Type your question here..."}
+                      disabled={interview.handRaised}
+                      className="flex-1 input-synth text-sm"
+                    />
                     <button
-                      onClick={() => setInterview(prev => ({ ...prev, userGuidance: '' }))}
-                      className="p-2 rounded hover:bg-synth-surface-high transition-colors text-synth-text-muted"
+                      onClick={raiseHand}
+                      disabled={interview.handRaised || !interview.userQuestion.trim()}
+                      className={`btn-synth ${interview.handRaised ? 'btn-synth-secondary opacity-50' : 'btn-synth-primary'}`}
                     >
-                      <span className="material-symbols-outlined text-sm">close</span>
+                      <span className="material-symbols-outlined text-sm">front_hand</span>
+                      {interview.handRaised ? 'QUEUED' : 'RAISE HAND'}
                     </button>
-                  )}
+                  </div>
+
+                  {/* Guidance Input */}
+                  <div className="flex gap-2 items-center">
+                    <input
+                      type="text"
+                      value={interview.userGuidance}
+                      onChange={e => setInterview(prev => ({ ...prev, userGuidance: e.target.value }))}
+                      placeholder="Guide the conversation... (e.g., 'Be more respectful', 'Dive deeper')"
+                      className="flex-1 input-synth text-xs"
+                    />
+                    {interview.userGuidance && (
+                      <button
+                        onClick={() => setInterview(prev => ({ ...prev, userGuidance: '' }))}
+                        className="p-2 rounded hover:bg-synth-surface-high transition-colors text-synth-text-muted"
+                      >
+                        <span className="material-symbols-outlined text-sm">close</span>
+                      </button>
+                    )}
+                  </div>
                 </div>
-              </div>
+              ) : (
+                /* Conversational Mode Input */
+                <div className="flex flex-col gap-3">
+                  <div className="flex items-center gap-2 text-xs text-synth-violet mb-2">
+                    <span className="material-symbols-outlined text-sm">chat</span>
+                    Talking to {interview.conversationalPartner === 'host' ? 'HOST' : 'EXPERT'}
+                  </div>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      id="conversational-input"
+                      onKeyDown={e => {
+                        if (e.key === 'Enter' && !e.shiftKey && (e.target as HTMLInputElement).value.trim()) {
+                          e.preventDefault();
+                          sendConversationalMessage((e.target as HTMLInputElement).value);
+                          (e.target as HTMLInputElement).value = '';
+                        }
+                      }}
+                      placeholder={`Ask the ${interview.conversationalPartner} anything... (Enter to send)`}
+                      className="flex-1 input-synth text-sm"
+                      autoFocus
+                    />
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         )}
