@@ -50,7 +50,7 @@ function formatRelative(dateString: string) {
 }
 
 // API Functions
-const PROXY_URL = 'http://localhost:3001';
+const PROXY_URL = 'http://172.20.111.133:3001';
 
 async function sendToModel(settings: Settings, messages: { role: string; content: string }[]) {
   // Route through proxy to avoid CORS
