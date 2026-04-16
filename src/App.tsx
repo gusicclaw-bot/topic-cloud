@@ -387,13 +387,17 @@ function App() {
   const [hostTestResult, setHostTestResult] = useState<string | null>(null);
   const [expertTestResult, setExpertTestResult] = useState<string | null>(null);
 
-  // Fetch models from a specific LM Studio instance
+  // Fetch models from a specific LM Studio instance with timeout
   async function fetchModels(baseUrl: string): Promise<string[]> {
     if (!baseUrl) return [];
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
       const response = await fetch(`${PROXY_URL}/proxy?url=${encodeURIComponent(`${baseUrl}/models`)}`, {
         headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       if (!response.ok) return [];
       const data = await response.json();
       return (data.data || []).map((m: { id: string }) => m.id);
@@ -402,13 +406,17 @@ function App() {
     }
   }
 
-  // Test connection to a specific URL
+  // Test connection to a specific URL with timeout
   async function testInterviewConnection(baseUrl: string): Promise<boolean> {
     if (!baseUrl) return false;
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5s timeout
       const response = await fetch(`${PROXY_URL}/proxy?url=${encodeURIComponent(`${baseUrl}/models`)}`, {
         headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
+        signal: controller.signal,
       });
+      clearTimeout(timeoutId);
       return response.ok;
     } catch {
       return false;
