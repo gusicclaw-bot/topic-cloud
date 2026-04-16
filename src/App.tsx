@@ -993,6 +993,7 @@ Keep it concise but informative (3-5 paragraphs max).`;
   }
 
   function stopInterview() {
+    pendingTurnRef.current = false; // Reset pending flag when stopping
     setInterview(prev => ({
       ...prev,
       isActive: false,
@@ -1212,6 +1213,7 @@ Keep it concise but informative (3-5 paragraphs max).`;
   }
 
   function resumeInterview() {
+    pendingTurnRef.current = false; // Reset pending flag to allow resume
     setInterview(prev => ({
       ...prev,
       isConversational: false,
