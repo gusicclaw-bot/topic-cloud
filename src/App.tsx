@@ -1022,6 +1022,11 @@ Keep it concise but informative (3-5 paragraphs max).`;
       }
     } catch (error) {
       console.error('Interview turn error:', error);
+      // Stop the interview on error to prevent infinite loop
+      setInterview(prev => ({
+        ...prev,
+        isRunning: false,
+      }));
     }
   }
 
