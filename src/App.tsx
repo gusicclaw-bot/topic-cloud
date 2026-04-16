@@ -379,6 +379,42 @@ function App() {
     interviewRef.current = interview;
   }, [interview]);
 
+  // Interview model discovery state
+  const [hostModels, setHostModels] = useState<string[]>([]);
+  const [expertModels, setExpertModels] = useState<string[]>([]);
+  const [hostModelsLoading, setHostModelsLoading] = useState(false);
+  const [expertModelsLoading, setExpertModelsLoading] = useState(false);
+  const [hostTestResult, setHostTestResult] = useState<string | null>(null);
+  const [expertTestResult, setExpertTestResult] = useState<string | null>(null);
+
+  // Fetch models from a specific LM Studio instance
+  async function fetchModels(baseUrl: string): Promise<string[]> {
+    if (!baseUrl) return [];
+    try {
+      const response = await fetch(`${PROXY_URL}/proxy?url=${encodeURIComponent(`${baseUrl}/models`)}`, {
+        headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
+      });
+      if (!response.ok) return [];
+      const data = await response.json();
+      return (data.data || []).map((m: { id: string }) => m.id);
+    } catch {
+      return [];
+    }
+  }
+
+  // Test connection to a specific URL
+  async function testInterviewConnection(baseUrl: string): Promise<boolean> {
+    if (!baseUrl) return false;
+    try {
+      const response = await fetch(`${PROXY_URL}/proxy?url=${encodeURIComponent(`${baseUrl}/models`)}`, {
+        headers: settings.apiKey ? { Authorization: `Bearer ${settings.apiKey}` } : {},
+      });
+      return response.ok;
+    } catch {
+      return false;
+    }
+  }
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
   // Modal helpers
@@ -1305,6 +1341,32 @@ Keep it concise but informative (3-5 paragraphs max).`;
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [currentChat?.messages]);
+
+  // Fetch host models when URL or apiKey changes
+  useEffect(() => {
+    if (!settings.hostBaseUrl) {
+      setHostModels([]);
+      return;
+    }
+    setHostModelsLoading(true);
+    fetchModels(settings.hostBaseUrl)
+      .then(models => setHostModels(models))
+      .catch(() => setHostModels([]))
+      .finally(() => setHostModelsLoading(false));
+  }, [settings.hostBaseUrl, settings.apiKey]);
+
+  // Fetch expert models when URL or apiKey changes
+  useEffect(() => {
+    if (!settings.expertBaseUrl) {
+      setExpertModels([]);
+      return;
+    }
+    setExpertModelsLoading(true);
+    fetchModels(settings.expertBaseUrl)
+      .then(models => setExpertModels(models))
+      .catch(() => setExpertModels([]))
+      .finally(() => setExpertModelsLoading(false));
+  }, [settings.expertBaseUrl, settings.apiKey]);
 
   // Actions
   function startChat(topicId: TopicId) {
@@ -2370,19 +2432,49 @@ Keep it concise but informative (3-5 paragraphs max).`;
                         placeholder="http://192.168.1.100:1234/v1"
                         className="input-synth"
                       />
-                      <p className="text-2xs text-synth-text-muted mt-2">
-                        Leave empty to use default endpoint
-                      </p>
+                      <button
+                        className="btn-synth btn-synth-secondary w-full justify-center mt-2"
+                        onClick={async () => {
+                          const ok = await testInterviewConnection(settings.hostBaseUrl);
+                          setHostTestResult(ok ? 'connection-established' : 'connection-failed');
+                          setTimeout(() => setHostTestResult(null), 3000);
+                        }}
+                        disabled={!settings.hostBaseUrl || hostModelsLoading}
+                      >
+                        {hostModelsLoading ? (
+                          <><span className="animate-pulse">LOADING...</span></>
+                        ) : (
+                          <><span className="material-symbols-outlined text-sm">network_check</span> TEST</>
+                        )}
+                      </button>
+                      {hostTestResult && (
+                        <div className={`mt-2 p-2 text-xs border ${hostTestResult.includes('established') ? 'border-synth-cyan/50 bg-synth-cyan/10 text-synth-cyan' : 'border-synth-error/50 bg-synth-error/10 text-synth-error-text'}`}>
+                          {hostTestResult === 'connection-established' ? 'CONNECTION OK' : 'CONNECTION FAILED'}
+                        </div>
+                      )}
                       <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2 mt-4">
-                        Host Model Name
+                        Host Model
                       </label>
-                      <input
-                        type="text"
-                        value={settings.hostModel}
-                        onChange={e => updateSettings('hostModel', e.target.value)}
-                        placeholder="google/gemma-4-26b-a4b"
-                        className="input-synth"
-                      />
+                      {hostModels.length > 0 ? (
+                        <select
+                          value={settings.hostModel}
+                          onChange={e => updateSettings('hostModel', e.target.value)}
+                          className="input-synth w-full"
+                        >
+                          <option value="">Select model...</option>
+                          {hostModels.map(m => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={settings.hostModel}
+                          onChange={e => updateSettings('hostModel', e.target.value)}
+                          placeholder="Enter model name manually"
+                          className="input-synth"
+                        />
+                      )}
                     </div>
                     
                     <div>
@@ -2400,19 +2492,49 @@ Keep it concise but informative (3-5 paragraphs max).`;
                         placeholder="http://192.168.1.101:1234/v1"
                         className="input-synth"
                       />
-                      <p className="text-2xs text-synth-text-muted mt-2">
-                        Leave empty to use default endpoint
-                      </p>
+                      <button
+                        className="btn-synth btn-synth-secondary w-full justify-center mt-2"
+                        onClick={async () => {
+                          const ok = await testInterviewConnection(settings.expertBaseUrl);
+                          setExpertTestResult(ok ? 'connection-established' : 'connection-failed');
+                          setTimeout(() => setExpertTestResult(null), 3000);
+                        }}
+                        disabled={!settings.expertBaseUrl || expertModelsLoading}
+                      >
+                        {expertModelsLoading ? (
+                          <><span className="animate-pulse">LOADING...</span></>
+                        ) : (
+                          <><span className="material-symbols-outlined text-sm">network_check</span> TEST</>
+                        )}
+                      </button>
+                      {expertTestResult && (
+                        <div className={`mt-2 p-2 text-xs border ${expertTestResult.includes('established') ? 'border-synth-cyan/50 bg-synth-cyan/10 text-synth-cyan' : 'border-synth-error/50 bg-synth-error/10 text-synth-error-text'}`}>
+                          {expertTestResult === 'connection-established' ? 'CONNECTION OK' : 'CONNECTION FAILED'}
+                        </div>
+                      )}
                       <label className="block text-2xs text-synth-text-secondary uppercase tracking-wider mb-2 mt-4">
-                        Expert Model Name
+                        Expert Model
                       </label>
-                      <input
-                        type="text"
-                        value={settings.expertModel}
-                        onChange={e => updateSettings('expertModel', e.target.value)}
-                        placeholder="google/gemma-4-26b-a4b"
-                        className="input-synth"
-                      />
+                      {expertModels.length > 0 ? (
+                        <select
+                          value={settings.expertModel}
+                          onChange={e => updateSettings('expertModel', e.target.value)}
+                          className="input-synth w-full"
+                        >
+                          <option value="">Select model...</option>
+                          {expertModels.map(m => (
+                            <option key={m} value={m}>{m}</option>
+                          ))}
+                        </select>
+                      ) : (
+                        <input
+                          type="text"
+                          value={settings.expertModel}
+                          onChange={e => updateSettings('expertModel', e.target.value)}
+                          placeholder="Enter model name manually"
+                          className="input-synth"
+                        />
+                      )}
                     </div>
                   </div>
                 </div>
