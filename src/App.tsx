@@ -373,6 +373,11 @@ function App() {
     isConversational: false,
     conversationalPartner: 'host' as 'host' | 'expert',
   });
+  // Ref to avoid stale closure in timeout callbacks
+  const interviewRef = useRef(interview);
+  useEffect(() => {
+    interviewRef.current = interview;
+  }, [interview]);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   
@@ -1015,17 +1020,26 @@ Keep it concise but informative (3-5 paragraphs max).`;
       }));
 
       // If still running, schedule next turn after a delay
-      if (currentInterview.isRunning && !queuedQuestion) {
+      // Use interviewRef to avoid stale closure bug (checking interview.isRunning directly is stale)
+      if (!queuedQuestion) {
         setTimeout(() => {
-          if (interview.isRunning) runInterviewTurn();
+          if (interviewRef.current.isRunning) {
+            runInterviewTurn();
+          }
         }, 1500);
       }
     } catch (error) {
       console.error('Interview turn error:', error);
-      // Stop the interview on error to prevent infinite loop
+      // Show error in UI
       setInterview(prev => ({
         ...prev,
         isRunning: false,
+        messages: [...prev.messages, {
+          id: createId('msg'),
+          speaker: 'user' as const,
+          text: `Error: ${error instanceof Error ? error.message : String(error)}`,
+          timestamp: new Date().toISOString(),
+        }],
       }));
     }
   }
