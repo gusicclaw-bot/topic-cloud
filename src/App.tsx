@@ -375,6 +375,7 @@ function App() {
   });
   // Ref to avoid stale closure in timeout callbacks
   const interviewRef = useRef(interview);
+  const pendingTurnRef = useRef(false); // Prevent concurrent turn requests
   useEffect(() => {
     interviewRef.current = interview;
   }, [interview]);
@@ -956,12 +957,27 @@ Keep it concise but informative (3-5 paragraphs max).`;
   }
 
   async function startInterview(topic: string) {
+    // Validate that models are set
+    const hostModel = settings.hostModel || '';
+    const expertModel = settings.expertModel || '';
+    
+    if (!hostModel || !expertModel) {
+      // Show error message in UI
+      setModal({
+        isOpen: true,
+        type: 'alert',
+        title: 'Model Not Set',
+        message: 'Please select a model for both Host and Expert in Settings before starting an interview.',
+      });
+      return;
+    }
+    
     setInterview(prev => ({
       ...prev,
       isActive: true,
       topic,
-      hostModel: settings.hostModel || settings.model,
-      expertModel: settings.expertModel || settings.model,
+      hostModel,
+      expertModel,
       messages: [],
       audienceQuestions: [],
       handRaised: false,
@@ -988,6 +1004,10 @@ Keep it concise but informative (3-5 paragraphs max).`;
   async function runInterviewTurn() {
     const currentInterview = interview;
     if (!currentInterview.isActive || !currentInterview.isRunning) return;
+    
+    // Prevent concurrent turn requests
+    if (pendingTurnRef.current) return;
+    pendingTurnRef.current = true;
 
     const isHostTurn = currentInterview.turnCount % 2 === 0;
     const speaker = isHostTurn ? 'host' : 'expert';
@@ -1067,13 +1087,17 @@ Keep it concise but informative (3-5 paragraphs max).`;
       // Use interviewRef to avoid stale closure bug (checking interview.isRunning directly is stale)
       if (!queuedQuestion) {
         setTimeout(() => {
+          pendingTurnRef.current = false; // Reset before running next turn
           if (interviewRef.current.isRunning) {
             runInterviewTurn();
           }
         }, 1500);
+      } else {
+        pendingTurnRef.current = false;
       }
     } catch (error) {
       console.error('Interview turn error:', error);
+      pendingTurnRef.current = false; // Reset on error
       // Show error in UI
       setInterview(prev => ({
         ...prev,
